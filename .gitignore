@@ -1,0 +1,24 @@
+# Build
+/target
+**/*.rs.bk
+*.pdb
+
+# Local agent instructions (kept private)
+AGENTS.md
+CLAUDE.md
+.claude/
+.codegraph/
+
+# Secrets and local env
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
