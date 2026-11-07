@@ -8,9 +8,22 @@ if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
 
 $dest = Join-Path $env:LOCALAPPDATA 'Programs\AgentUsage'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Get-Process agent-usage -ErrorAction SilentlyContinue | Stop-Process -Force
+# Close a running copy and wait until Windows releases the file.
+$running = Get-Process agent-usage -ErrorAction SilentlyContinue
+if ($running) {
+    $running | Stop-Process -Force
+    $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+}
 $exe = Join-Path $dest 'agent-usage.exe'
-Copy-Item (Join-Path $root 'target\release\agent-usage.exe') $exe -Force
+for ($i = 0; ; $i++) {
+    try {
+        Copy-Item (Join-Path $root 'target\release\agent-usage.exe') $exe -Force -ErrorAction Stop
+        break
+    } catch {
+        if ($i -ge 20) { throw }
+        Start-Sleep -Milliseconds 250
+    }
+}
 $ico = Get-ChildItem (Join-Path $root 'target\release\build') -Recurse -Filter icon.ico |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ($ico) { Copy-Item $ico.FullName (Join-Path $dest 'agent-usage.ico') -Force }
@@ -28,4 +41,6 @@ foreach ($dir in $places) {
     $lnk.Description = 'Cotas dos agentes de IA'
     $lnk.Save()
 }
+# Ask Explorer to drop cached icons so an updated icon shows at once.
+Start-Process ie4uinit.exe -ArgumentList '-show' -NoNewWindow -Wait -ErrorAction SilentlyContinue
 Write-Host "Instalado em $dest"

@@ -9,8 +9,10 @@ agente de IA: Antigravity, Claude (várias contas), Codex, Cursor & Grok e OpenC
 
 - **Uma linha por janela de cota** (5 horas, semanal, mensal…), sempre em **% restante**,
   com o tempo até renovar ao lado.
-- **A cor indica o estado:** neutra está bem; âmbar pede atenção (pouca cota ou consumo acima do
-  ritmo); vermelha está no limite ou esgotada.
+- **A cor indica o estado:** verde está no ritmo; âmbar pede atenção (pouca cota ou consumo acima do
+  ritmo); cinza está esgotada até renovar.
+- **Tema e idioma:** os botões ao lado de Atualizar alternam o tema (sistema, claro, escuro) e o
+  idioma (PT-BR, EN-US). A escolha fica salva.
 - **O risquinho na barra marca o ritmo:** é onde a barra estaria com um consumo uniforme até a
   renovação. Barra à esquerda do risco quer dizer que você está gastando mais rápido que o tempo.
 - O anel no canto de cada cartão mostra a janela mais apertada daquela conta.

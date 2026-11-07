@@ -4,6 +4,15 @@ use crate::model::Status;
 use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily};
 use std::sync::Arc;
 
+/// On pace.
+const OK: Color32 = Color32::from_rgb(0x00, 0x90, 0x51);
+/// Needs attention (low, or used faster than the window elapses).
+const WARN: Color32 = Color32::from_rgb(0xC6, 0x90, 0x35);
+/// Depleted until the window resets.
+const EMPTY: Color32 = Color32::from_rgb(0x8F, 0x93, 0x94);
+/// Window close button on hover.
+const CLOSE: Color32 = Color32::from_rgb(0xC4, 0x2B, 0x1C);
+
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub bg: Color32,
@@ -17,7 +26,8 @@ pub struct Palette {
     pub track: Color32,
     pub ok: Color32,
     pub warn: Color32,
-    pub crit: Color32,
+    pub empty: Color32,
+    pub close_hover: Color32,
     pub pace: Color32,
     pub dark: bool,
 }
@@ -34,9 +44,10 @@ impl Palette {
             muted: Color32::from_rgb(0x82, 0x82, 0x7E),
             faint: Color32::from_rgb(0xB4, 0xB4, 0xAF),
             track: Color32::from_rgb(0xEE, 0xEE, 0xEA),
-            ok: Color32::from_rgb(0x2B, 0x2B, 0x30),
-            warn: Color32::from_rgb(0xE0, 0x8A, 0x1E),
-            crit: Color32::from_rgb(0xE5, 0x48, 0x4D),
+            ok: OK,
+            warn: WARN,
+            empty: EMPTY,
+            close_hover: CLOSE,
             pace: Color32::from_rgb(0x17, 0x17, 0x1A),
             dark: false,
         }
@@ -53,9 +64,10 @@ impl Palette {
             muted: Color32::from_rgb(0x8C, 0x8C, 0x93),
             faint: Color32::from_rgb(0x55, 0x55, 0x5C),
             track: Color32::from_rgb(0x26, 0x26, 0x2B),
-            ok: Color32::from_rgb(0xE4, 0xE4, 0xE7),
-            warn: Color32::from_rgb(0xF2, 0xA1, 0x3B),
-            crit: Color32::from_rgb(0xFF, 0x5F, 0x64),
+            ok: OK,
+            warn: WARN,
+            empty: EMPTY,
+            close_hover: CLOSE,
             pace: Color32::from_rgb(0xEC, 0xEC, 0xEE),
             dark: true,
         }
@@ -64,8 +76,8 @@ impl Palette {
     pub fn status(&self, s: Status) -> Color32 {
         match s {
             Status::Ok => self.ok,
-            Status::Warning => self.warn,
-            Status::Critical | Status::Empty => self.crit,
+            Status::Warning | Status::Critical => self.warn,
+            Status::Empty => self.empty,
         }
     }
 }

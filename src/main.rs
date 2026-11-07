@@ -1,24 +1,29 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod anim;
+mod chrome;
 mod config;
 mod demo;
+mod i18n;
 mod icons;
 mod model;
 mod poller;
+mod prefs;
 mod providers;
 mod theme;
 mod ui;
 
 use chrono::Utc;
 use eframe::egui;
+use prefs::{Prefs, ThemeMode};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 struct Args {
     demo: bool,
-    theme: Option<egui::Theme>,
+    theme: Option<ThemeMode>,
+    lang: Option<i18n::Lang>,
     screenshot: Option<PathBuf>,
     size: [f32; 2],
 }
@@ -27,15 +32,18 @@ fn parse_args() -> Args {
     let mut args = Args {
         demo: false,
         theme: None,
+        lang: None,
         screenshot: None,
-        size: [1180.0, 760.0],
+        size: [1180.0, 780.0],
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--demo" => args.demo = true,
-            "--light" => args.theme = Some(egui::Theme::Light),
-            "--dark" => args.theme = Some(egui::Theme::Dark),
+            "--light" => args.theme = Some(ThemeMode::Light),
+            "--dark" => args.theme = Some(ThemeMode::Dark),
+            "--en" => args.lang = Some(i18n::Lang::En),
+            "--pt" => args.lang = Some(i18n::Lang::Pt),
             "--screenshot" => args.screenshot = it.next().map(PathBuf::from),
             "--size" => {
                 if let Some((w, h)) = it.next().as_deref().and_then(|s| s.split_once('x'))
@@ -58,11 +66,13 @@ enum Data {
 struct App {
     data: Data,
     dash: ui::Dashboard,
+    icons: icons::Icons,
+    prefs: Prefs,
     refresh_every: u64,
-    theme: Option<egui::Theme>,
     screenshot: Option<PathBuf>,
     shot_taken: Arc<Mutex<bool>>,
     demo_since: f64,
+    first_frame: Option<f64>,
 }
 
 impl App {
@@ -80,14 +90,23 @@ impl App {
                 cc.egui_ctx.clone(),
             ))
         };
+        let mut prefs = Prefs::load();
+        if let Some(t) = args.theme {
+            prefs.theme = t;
+        }
+        if let Some(l) = args.lang {
+            prefs.lang = l;
+        }
         Self {
             data,
             dash: ui::Dashboard::new(),
+            icons: icons::Icons::load(&cc.egui_ctx),
+            prefs,
             refresh_every,
-            theme: args.theme,
             screenshot: args.screenshot,
             shot_taken: Arc::new(Mutex::new(false)),
             demo_since: 0.0,
+            first_frame: None,
         }
     }
 }
@@ -95,9 +114,12 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        let dark = match self.theme {
-            Some(t) => t == egui::Theme::Dark,
-            None => ctx.system_theme().unwrap_or(egui::Theme::Light) == egui::Theme::Dark,
+        let dark = match self.prefs.theme {
+            ThemeMode::Light => false,
+            ThemeMode::Dark => true,
+            ThemeMode::System => {
+                ctx.system_theme().unwrap_or(egui::Theme::Light) == egui::Theme::Dark
+            }
         };
         let pal = if dark {
             theme::Palette::dark()
@@ -116,43 +138,54 @@ impl eframe::App for App {
         let now = Utc::now();
         let time = ctx.input(|i| i.time);
 
-        let clicked = match &mut self.data {
-            Data::Demo(accounts) => {
-                let busy = time - self.demo_since < 0.9;
-                let f = ui::Frame {
-                    accounts,
-                    busy,
-                    last_refresh: Some(now - chrono::Duration::seconds(12)),
-                    refresh_every: self.refresh_every,
-                    now,
-                };
-                let r = self.dash.show(ui, &pal, f);
-                if r || key_refresh {
-                    self.demo_since = time;
-                }
-                false
-            }
+        let full = ui.max_rect();
+        ui.painter().rect_filled(full, 0.0, pal.bg);
+        let body = chrome::title_bar(ui, &pal, &self.icons, self.prefs.lang, full);
+        let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body));
+
+        let (accounts, busy, last) = match &self.data {
+            Data::Demo(a) => (
+                a.clone(),
+                time - self.demo_since < 0.9,
+                Some(now - chrono::Duration::seconds(12)),
+            ),
             Data::Live(p) => {
-                let (accounts, busy, last) = {
-                    let s = p.shared.lock().unwrap();
-                    (s.accounts.clone(), s.in_flight > 0, s.last_refresh)
-                };
-                let f = ui::Frame {
-                    accounts: &accounts,
-                    busy,
-                    last_refresh: last,
-                    refresh_every: self.refresh_every,
-                    now,
-                };
-                self.dash.show(ui, &pal, f) || key_refresh
+                let s = p.shared.lock().unwrap();
+                (s.accounts.clone(), s.in_flight > 0, s.last_refresh)
             }
         };
-        if clicked && let Data::Live(p) = &self.data {
-            p.refresh();
+        let f = ui::Frame {
+            accounts: &accounts,
+            busy,
+            last_refresh: last,
+            refresh_every: self.refresh_every,
+            now,
+            lang: self.prefs.lang,
+            theme: self.prefs.theme,
+            icons: &self.icons,
+        };
+        let act = self.dash.show(&mut body_ui, &pal, f);
+        chrome::frame_edges(ui, &pal, full);
+
+        if act.refresh || key_refresh {
+            match &self.data {
+                Data::Demo(_) => self.demo_since = time,
+                Data::Live(p) => p.refresh(),
+            }
+        }
+        if act.cycle_theme || act.toggle_lang {
+            if act.cycle_theme {
+                self.prefs.theme = self.prefs.theme.next();
+            }
+            if act.toggle_lang {
+                self.prefs.lang = self.prefs.lang.toggled();
+            }
+            self.prefs.save();
+            ctx.request_repaint();
         }
 
         if let Some(path) = self.screenshot.clone()
-            && time > 3.2
+            && time - *self.first_frame.get_or_insert(time) > 3.2
             && !*self.shot_taken.lock().unwrap()
         {
             *self.shot_taken.lock().unwrap() = true;
@@ -176,7 +209,7 @@ impl eframe::App for App {
 }
 
 fn window_icon() -> egui::IconData {
-    let img = image::load_from_memory(include_bytes!("../assets/icon.png"))
+    let img = image::load_from_memory(icons::APP_ICON)
         .map(|i| i.resize(128, 128, image::imageops::FilterType::Lanczos3))
         .map(|i| i.to_rgba8());
     match img {
@@ -196,7 +229,8 @@ fn main() -> eframe::Result {
             .with_title("Agent Usage")
             .with_app_id("agent-usage")
             .with_inner_size(args.size)
-            .with_min_inner_size([380.0, 420.0])
+            .with_min_inner_size([400.0, 460.0])
+            .with_decorations(false)
             .with_icon(window_icon()),
         ..Default::default()
     };

@@ -2,13 +2,15 @@
 //! so spacing, motion and color stay exact.
 
 use crate::anim::{Tweens, ease_in_out, ease_out_cubic};
-use crate::icons;
+use crate::i18n::Lang;
+use crate::icons::{self, Icons};
 use crate::model::{Account, Reading, Status, Window};
+use crate::prefs::ThemeMode;
 use crate::theme::{Palette, SEMIBOLD};
 use chrono::{DateTime, Local, Utc};
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontFamily, FontId, Painter, Pos2, Rect, Sense, Shape,
-    Stroke, StrokeKind, Ui, Vec2, epaint::PathStroke, pos2, vec2,
+    self, Align2, Color32, CornerRadius, FontFamily, FontId, Painter, Pos2, Rect, Response, Sense,
+    Shape, Stroke, StrokeKind, Ui, Vec2, epaint::PathStroke, pos2, vec2,
 };
 use std::collections::HashMap;
 use std::f32::consts::TAU;
@@ -19,6 +21,17 @@ pub struct Frame<'a> {
     pub last_refresh: Option<DateTime<Utc>>,
     pub refresh_every: u64,
     pub now: DateTime<Utc>,
+    pub lang: Lang,
+    pub theme: ThemeMode,
+    pub icons: &'a Icons,
+}
+
+/// What the user asked for this frame.
+#[derive(Default)]
+pub struct Actions {
+    pub refresh: bool,
+    pub cycle_theme: bool,
+    pub toggle_lang: bool,
 }
 
 pub struct Dashboard {
@@ -50,6 +63,7 @@ impl Metrics {
 }
 
 const BAR_H: f32 = 6.0;
+const BTN_R: f32 = 18.0;
 
 impl Dashboard {
     pub fn new() -> Self {
@@ -60,33 +74,31 @@ impl Dashboard {
         }
     }
 
-    pub fn show(&mut self, ui: &mut Ui, pal: &Palette, f: Frame<'_>) -> bool {
+    pub fn show(&mut self, ui: &mut Ui, pal: &Palette, f: Frame<'_>) -> Actions {
         let now = ui.input(|i| i.time);
         let start = *self.start.get_or_insert(now);
         let since = (now - start) as f32;
         self.tweens.active = false;
-        let mut refresh = false;
+        let mut act = Actions::default();
+        let lang = f.lang;
 
         let full = ui.max_rect();
-        ui.painter().rect_filled(full, 0.0, pal.bg);
-
         let outer = (full.width() * 0.045).clamp(16.0, 56.0);
         let content_w = (full.width() - outer * 2.0).min(1280.0);
         let left = full.center().x - content_w / 2.0;
-        let top = full.top() + outer * 0.8;
+        let top = full.top() + outer * 0.45;
 
         // ---------- header ----------
         let head_alpha = ease_out_cubic(since / 0.5);
         let p = ui.painter().clone();
-        let title_pos = pos2(left, top + (1.0 - head_alpha) * 6.0);
         p.text(
-            title_pos,
+            pos2(left, top + (1.0 - head_alpha) * 6.0),
             Align2::LEFT_TOP,
-            "Cotas",
+            lang.t("Cotas", "Quotas"),
             FontId::new(24.0, FontFamily::Name(SEMIBOLD.into())),
             pal.text.gamma_multiply(head_alpha),
         );
-        let (summary, summary_color) = summary(f.accounts, f.now, pal);
+        let (summary, summary_color) = summary(f.accounts, f.now, pal, lang);
         let dot_c = pos2(left + 4.0, top + 46.0);
         p.circle_filled(dot_c, 3.5, summary_color.gamma_multiply(head_alpha));
         p.text(
@@ -97,22 +109,15 @@ impl Dashboard {
             pal.muted.gamma_multiply(head_alpha),
         );
 
-        // Refresh button.
-        let btn =
-            Rect::from_center_size(pos2(left + content_w - 18.0, top + 20.0), vec2(36.0, 36.0));
-        let resp = ui.interact(btn, ui.scope_id().with("refresh"), Sense::click());
-        let hover =
-            ui.ctx()
-                .animate_bool_with_time(ui.scope_id().with("refresh-h"), resp.hovered(), 0.15);
-        p.circle_filled(btn.center(), 18.0, pal.card.gamma_multiply(head_alpha));
-        p.circle_stroke(
-            btn.center(),
-            17.5,
-            Stroke::new(
-                1.0,
-                lerp_color(pal.border, pal.border_hover, hover).gamma_multiply(head_alpha),
-            ),
-        );
+        // Header buttons, right to left: refresh, theme, language.
+        let cy = top + 20.0;
+        let step = BTN_R * 2.0 + 10.0;
+        let refresh_c = pos2(left + content_w - BTN_R, cy);
+        let theme_c = refresh_c - vec2(step, 0.0);
+        let lang_c = theme_c - vec2(step, 0.0);
+
+        let (resp, hover) = self.round_button(ui, &p, pal, refresh_c, "refresh", head_alpha);
+        let glyph = lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha);
         let dt = ui.input(|i| i.stable_dt).min(0.05);
         if f.busy {
             self.spin += dt * TAU * 1.1;
@@ -129,40 +134,70 @@ impl Dashboard {
                 self.spin = 0.0;
             }
         }
-        refresh_icon(
-            &p,
-            btn.center(),
-            7.0,
-            self.spin,
-            lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha),
-        );
-        if resp.clicked() {
-            refresh = true;
-        }
+        refresh_icon(&p, refresh_c, 7.0, self.spin, glyph);
+        act.refresh = resp.clicked();
         resp.on_hover_ui(|ui| {
-            ui.label(egui::RichText::new("Atualizar agora").strong());
+            ui.label(egui::RichText::new(lang.t("Atualizar agora", "Refresh now")).strong());
             if let Some(at) = f.last_refresh {
                 let ago = (f.now - at).num_seconds().max(0);
                 let next = (f.refresh_every as i64 - ago).max(0);
-                ui.label(format!(
-                    "Atualizado há {} · próxima em {}",
-                    short_secs(ago),
-                    short_secs(next)
-                ));
+                ui.label(match lang {
+                    Lang::Pt => format!(
+                        "Atualizado há {} · próxima em {}",
+                        short_secs(ago),
+                        short_secs(next)
+                    ),
+                    Lang::En => format!(
+                        "Updated {} ago · next in {}",
+                        short_secs(ago),
+                        short_secs(next)
+                    ),
+                });
             }
             ui.label(egui::RichText::new("F5").weak());
+        });
+
+        let (resp, hover) = self.round_button(ui, &p, pal, theme_c, "theme", head_alpha);
+        let glyph = lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha);
+        theme_icon(&p, theme_c, f.theme, glyph, pal.card);
+        act.cycle_theme = resp.clicked();
+        resp.on_hover_ui(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{}: {}",
+                    lang.t("Tema", "Theme"),
+                    f.theme.name(lang)
+                ))
+                .strong(),
+            );
+            ui.label(format!(
+                "{} {}",
+                lang.t("Clique para", "Click for"),
+                f.theme.next().name(lang).to_lowercase()
+            ));
+        });
+
+        let (resp, hover) = self.round_button(ui, &p, pal, lang_c, "lang", head_alpha);
+        let glyph = lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha);
+        p.text(
+            lang_c + vec2(0.0, 0.5),
+            Align2::CENTER_CENTER,
+            lang.code(),
+            FontId::new(11.5, FontFamily::Name(SEMIBOLD.into())),
+            glyph,
+        );
+        act.toggle_lang = resp.clicked();
+        resp.on_hover_ui(|ui| {
+            ui.label(
+                egui::RichText::new(lang.t("Idioma: Português (BR)", "Language: English (US)"))
+                    .strong(),
+            );
+            ui.label(lang.t("Clique para English (US)", "Click for Português (BR)"));
         });
 
         // ---------- grid ----------
         let grid_top = top + 78.0;
         let avail_h = full.bottom() - grid_top - outer * 0.6;
-        let cols = if content_w >= 980.0 {
-            3
-        } else if content_w >= 620.0 {
-            2
-        } else {
-            1
-        };
 
         let mut cards: Vec<&Account> = f.accounts.iter().collect();
         cards.sort_by(|a, b| {
@@ -176,14 +211,22 @@ impl Dashboard {
         for a in &cards {
             *per_provider.entry(a.provider).or_default() += 1;
         }
+        let max_cols = if content_w >= 980.0 {
+            3
+        } else if content_w >= 620.0 {
+            2
+        } else {
+            1
+        };
+        let cols = max_cols.min(cards.len().max(1));
 
         // Pick the largest density that fits.
         let mut k = 1.0;
         let mut m = Metrics::at(k);
-        let mut placed;
+        let mut rows;
         let mut total_h;
         loop {
-            (placed, total_h) = masonry(&cards, cols, &m);
+            (rows, total_h) = grid_rows(&cards, cols, &m);
             if total_h <= avail_h || k <= 0.8 {
                 break;
             }
@@ -199,13 +242,21 @@ impl Dashboard {
             .show(&mut child, |ui| {
                 let (area, _) = ui
                     .allocate_exact_size(vec2(full.width(), total_h + outer * 0.6), Sense::hover());
-                for (idx, (acc, &(col, y, h))) in cards.iter().zip(placed.iter()).enumerate() {
-                    let rect = Rect::from_min_size(
-                        pos2(left + col as f32 * (card_w + m.gap), area.top() + y),
-                        vec2(card_w, h),
-                    );
-                    let show_account = per_provider.get(&acc.provider).copied().unwrap_or(0) > 1;
-                    self.card(ui, pal, &f, acc, rect, &m, idx, since, now, show_account);
+                let mut idx = 0;
+                for (r, &(y, h)) in rows.iter().enumerate() {
+                    let row_cards = &cards[r * cols..((r + 1) * cols).min(cards.len())];
+                    // Center an incomplete last row.
+                    let shift = (cols - row_cards.len()) as f32 * (card_w + m.gap) / 2.0;
+                    for (c, acc) in row_cards.iter().enumerate() {
+                        let rect = Rect::from_min_size(
+                            pos2(left + shift + c as f32 * (card_w + m.gap), area.top() + y),
+                            vec2(card_w, h),
+                        );
+                        let show_account =
+                            per_provider.get(&acc.provider).copied().unwrap_or(0) > 1;
+                        self.card(ui, pal, &f, acc, rect, &m, idx, since, now, show_account);
+                        idx += 1;
+                    }
                 }
             });
 
@@ -216,7 +267,42 @@ impl Dashboard {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(1000));
         }
-        refresh
+        act
+    }
+
+    /// A round header button; returns its response and hover amount.
+    fn round_button(
+        &mut self,
+        ui: &Ui,
+        p: &Painter,
+        pal: &Palette,
+        c: Pos2,
+        id: &str,
+        alpha: f32,
+    ) -> (Response, f32) {
+        let rect = Rect::from_center_size(c, vec2(BTN_R * 2.0, BTN_R * 2.0));
+        let resp = ui.interact(rect, ui.scope_id().with(("btn", id)), Sense::click());
+        let hover = ui.ctx().animate_bool_with_time(
+            ui.scope_id().with(("btn-h", id)),
+            resp.hovered(),
+            0.15,
+        );
+        let press = if resp.is_pointer_button_down_on() {
+            0.6
+        } else {
+            0.0
+        };
+        p.circle_filled(c, BTN_R, pal.card.gamma_multiply(alpha));
+        p.circle_stroke(
+            c,
+            BTN_R - 0.5,
+            Stroke::new(
+                1.0,
+                lerp_color(pal.border, pal.border_hover, (hover + press).min(1.0))
+                    .gamma_multiply(alpha),
+            ),
+        );
+        (resp, hover)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -233,6 +319,7 @@ impl Dashboard {
         now: f64,
         show_account: bool,
     ) {
+        let lang = f.lang;
         let appear = ease_out_cubic((since - 0.08 - idx as f32 * 0.06) / 0.55);
         if appear < 1.0 {
             self.tweens.active = true;
@@ -277,13 +364,14 @@ impl Dashboard {
         // Header: icon, title, optional account, status ring.
         let inner = rect.shrink(m.pad);
         let hy = inner.top() + m.head / 2.0;
-        let icon_c = pos2(inner.left() + 11.0, hy);
-        let icon_color = if unavailable {
-            pal.faint
-        } else {
-            icons::brand(acc.provider, pal.text)
-        };
-        icons::paint(&p, acc.provider, icon_c, 20.0, icon_color.gamma_multiply(a));
+        let icon = Rect::from_min_size(pos2(inner.left(), hy - 11.0), vec2(22.0, 22.0));
+        icons::paint(
+            ui,
+            f.icons.provider(acc.provider),
+            icon,
+            6.0,
+            if unavailable { a * 0.5 } else { a },
+        );
         let title_font = FontId::new(15.5, FontFamily::Name(SEMIBOLD.into()));
         let title = p.layout_no_wrap(
             acc.title().to_string(),
@@ -339,14 +427,14 @@ impl Dashboard {
                 p.text(
                     pos2(inner.left(), body_top + 4.0),
                     Align2::LEFT_TOP,
-                    "Sem dados",
+                    lang.t("Sem dados", "No data"),
                     FontId::proportional(14.0),
                     pal.muted.gamma_multiply(a),
                 );
                 p.text(
                     pos2(inner.left(), body_top + 24.0),
                     Align2::LEFT_TOP,
-                    capitalize(reason),
+                    capitalize(&lang.data(reason)),
                     FontId::proportional(12.5),
                     pal.faint.gamma_multiply(appear),
                 );
@@ -365,7 +453,7 @@ impl Dashboard {
                     );
                     let rc = pos2(inner.right() - 9.0, hy);
                     let ring_track = if st == Status::Empty {
-                        lerp_color(pal.track, pal.crit, 0.35)
+                        lerp_color(pal.track, pal.empty, 0.45)
                     } else {
                         pal.track
                     };
@@ -384,8 +472,9 @@ impl Dashboard {
                         Sense::hover(),
                     )
                     .on_hover_text(format!(
-                        "Mais apertada: {} · {}%",
-                        b.label,
+                        "{}: {} · {}%",
+                        lang.t("Mais apertada", "Tightest"),
+                        lang.data(&b.label),
                         pct(b.remaining)
                     ));
                 }
@@ -407,7 +496,16 @@ impl Dashboard {
                         let row =
                             Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), m.row));
                         let delay = 0.2 + idx as f32 * 0.06 + row_i as f32 * 0.05;
-                        self.row(ui, pal, f.now, now, &p, &acc.key, gi, wi, w, row, a, delay);
+                        let ctx = RowCtx {
+                            pal,
+                            lang,
+                            now_utc: f.now,
+                            now,
+                            painter: &p,
+                            alpha: a,
+                            delay,
+                        };
+                        self.row(ui, &ctx, &format!("bar:{}:{gi}:{wi}", acc.key), w, row);
                         y += m.row;
                         row_i += 1;
                     }
@@ -416,44 +514,29 @@ impl Dashboard {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn row(
-        &mut self,
-        ui: &mut Ui,
-        pal: &Palette,
-        now_utc: DateTime<Utc>,
-        now: f64,
-        p: &Painter,
-        key: &str,
-        gi: usize,
-        wi: usize,
-        w: &Window,
-        row: Rect,
-        a: f32,
-        delay: f32,
-    ) {
-        let st = w.status(now_utc);
+    fn row(&mut self, ui: &mut Ui, c: &RowCtx<'_>, id: &str, w: &Window, row: Rect) {
+        let (pal, p, a, lang) = (c.pal, c.painter, c.alpha, c.lang);
+        let st = w.status(c.now_utc);
         let color = pal.status(st);
-        let id = format!("bar:{key}:{gi}:{wi}");
-        let v = self.tweens.get(&id, w.remaining, 0.0, now, 0.9, delay);
-        let resp = ui.interact(row, ui.scope_id().with(&id), Sense::hover());
+        let v = self.tweens.get(id, w.remaining, 0.0, c.now, 0.9, c.delay);
+        let resp = ui.interact(row, ui.scope_id().with(id), Sense::hover());
         let hover =
             ui.ctx()
-                .animate_bool_with_time(ui.scope_id().with((&id, "h")), resp.hovered(), 0.15);
+                .animate_bool_with_time(ui.scope_id().with((id, "h")), resp.hovered(), 0.15);
+        let label = lang.data(&w.label);
 
         let line_y = row.top() + 9.0;
         p.text(
             pos2(row.left(), line_y),
             Align2::LEFT_CENTER,
-            &w.label,
+            &label,
             FontId::proportional(13.0),
             lerp_color(pal.muted, pal.text, hover * 0.6).gamma_multiply(a),
         );
         // Right side: countdown (muted), then the percentage.
-        let pct_text = format!("{}%", pct(v));
         let pct_color = if st == Status::Ok { pal.text } else { color };
         let pct_g = p.layout_no_wrap(
-            pct_text,
+            format!("{}%", pct(v)),
             FontId::new(14.0, FontFamily::Name(SEMIBOLD.into())),
             pct_color.gamma_multiply(a),
         );
@@ -464,11 +547,11 @@ impl Dashboard {
             pal.text,
         );
         if let Some(at) = w.resets_at {
-            let left = (at - now_utc).num_seconds();
+            let left = (at - c.now_utc).num_seconds();
             p.text(
                 pos2(row.right() - pct_w - 10.0, line_y + 0.5),
                 Align2::RIGHT_CENTER,
-                countdown(left),
+                countdown(left, lang),
                 FontId::proportional(12.0),
                 pal.muted.gamma_multiply(a * 0.8),
             );
@@ -477,7 +560,7 @@ impl Dashboard {
         // Bar.
         let bar = Rect::from_min_size(pos2(row.left(), row.top() + 22.0), vec2(row.width(), BAR_H));
         let track = if st == Status::Empty {
-            lerp_color(pal.track, pal.crit, 0.18)
+            lerp_color(pal.track, pal.empty, 0.3)
         } else {
             pal.track
         };
@@ -487,12 +570,12 @@ impl Dashboard {
             p.rect_filled(fill, 3.0, color.gamma_multiply(a));
         }
         // Pace marker: where the fill would be at an even pace.
-        if let Some(t) = w.time_left_fraction(now_utc) {
+        if let Some(t) = w.time_left_fraction(c.now_utc) {
             let tv = self
                 .tweens
-                .get(&format!("{id}:pace"), t, t, now, 0.6, delay + 0.4);
+                .get(&format!("{id}:pace"), t, t, c.now, 0.6, c.delay + 0.4);
             let appear = ease_in_out(
-                ((now as f32) - (self.start.unwrap_or(0.0) as f32) - delay - 0.5) / 0.4,
+                ((c.now as f32) - (self.start.unwrap_or(0.0) as f32) - c.delay - 0.5) / 0.4,
             );
             if appear < 1.0 {
                 self.tweens.active = true;
@@ -506,40 +589,50 @@ impl Dashboard {
         }
 
         resp.on_hover_ui(|ui| {
-            ui.set_max_width(260.0);
+            ui.set_max_width(280.0);
             ui.label(
-                egui::RichText::new(format!("{} · {}% restante", w.label, pct(w.remaining)))
-                    .strong(),
+                egui::RichText::new(format!(
+                    "{label} · {}% {}",
+                    pct(w.remaining),
+                    lang.t("restante", "left")
+                ))
+                .strong(),
             );
             if let Some(at) = w.resets_at {
-                ui.label(format!("Renova {}", local_when(at)));
+                ui.label(format!(
+                    "{} {}",
+                    lang.t("Renova", "Resets"),
+                    local_when(at, lang)
+                ));
             }
-            if let Some(line) = pace_text(w, now_utc) {
+            if let Some(line) = pace_text(w, c.now_utc, lang) {
                 ui.label(egui::RichText::new(line).weak());
             }
         });
     }
 }
 
-/// Place cards (already in reading order) into the shortest column.
-/// Returns (column, y, height) per card and the total height.
-fn masonry(cards: &[&Account], cols: usize, m: &Metrics) -> (Vec<(usize, f32, f32)>, f32) {
-    let mut bottoms = vec![0.0f32; cols];
-    let mut out: Vec<(usize, f32, f32)> = Vec::with_capacity(cards.len());
-    for a in cards {
-        let h = card_height(a, m);
-        let col = (0..cols)
-            .min_by(|&x, &y| bottoms[x].total_cmp(&bottoms[y]).then(x.cmp(&y)))
-            .unwrap_or(0);
-        let y = if bottoms[col] > 0.0 {
-            bottoms[col] + m.gap
-        } else {
-            0.0
-        };
-        out.push((col, y, h));
-        bottoms[col] = y + h;
+struct RowCtx<'a> {
+    pal: &'a Palette,
+    lang: Lang,
+    now_utc: DateTime<Utc>,
+    now: f64,
+    painter: &'a Painter,
+    alpha: f32,
+    delay: f32,
+}
+
+/// Row-major grid: every card in a row shares the row's height.
+/// Returns (y, height) per row and the total height.
+fn grid_rows(cards: &[&Account], cols: usize, m: &Metrics) -> (Vec<(f32, f32)>, f32) {
+    let mut out = Vec::new();
+    let mut y = 0.0;
+    for chunk in cards.chunks(cols) {
+        let h = chunk.iter().map(|a| card_height(a, m)).fold(0.0, f32::max);
+        out.push((y, h));
+        y += h + m.gap;
     }
-    let total = bottoms.iter().copied().fold(0.0, f32::max);
+    let total = (y - m.gap).max(0.0);
     (out, total)
 }
 
@@ -560,36 +653,43 @@ fn card_height(a: &Account, m: &Metrics) -> f32 {
     m.pad * 2.0 + m.head + m.gap * 0.6 + body - 10.0
 }
 
-fn summary(accounts: &[Account], now: DateTime<Utc>, pal: &Palette) -> (String, Color32) {
+fn summary(
+    accounts: &[Account],
+    now: DateTime<Utc>,
+    pal: &Palette,
+    lang: Lang,
+) -> (String, Color32) {
     let mut warn = 0;
-    let mut crit = 0;
+    let mut empty = 0;
     let mut ok = 0;
     for a in accounts {
         for w in a.windows() {
             match w.status(now) {
                 Status::Ok => ok += 1,
-                Status::Warning => warn += 1,
-                Status::Critical | Status::Empty => crit += 1,
+                Status::Warning | Status::Critical => warn += 1,
+                Status::Empty => empty += 1,
             }
         }
     }
-    if ok + warn + crit == 0 {
-        return ("Lendo as cotas…".into(), pal.faint);
+    if ok + warn + empty == 0 {
+        return (
+            lang.t("Lendo as cotas…", "Reading quotas…").into(),
+            pal.faint,
+        );
     }
-    match (crit, warn) {
-        (0, 0) => ("Tudo dentro do ritmo".into(), pal.ok),
-        (0, w) => (
-            format!("{w} {} atenção", plural(w, "pede", "pedem")),
-            pal.warn,
-        ),
-        (c, 0) => (
-            format!("{c} {} no limite", plural(c, "cota", "cotas")),
-            pal.crit,
-        ),
-        (c, w) => (
-            format!("{c} no limite · {w} {} atenção", plural(w, "pede", "pedem")),
-            pal.crit,
-        ),
+    let attention = |n: usize| match lang {
+        Lang::Pt => format!("{n} {} atenção", plural(n, "pede", "pedem")),
+        Lang::En => format!("{n} {} attention", plural(n, "needs", "need")),
+    };
+    let depleted = |n: usize| match lang {
+        Lang::Pt => format!("{n} {}", plural(n, "esgotada", "esgotadas")),
+        Lang::En => format!("{n} depleted"),
+    };
+    match (empty, warn) {
+        (0, 0) => (lang.t("Tudo dentro do ritmo", "All on pace").into(), pal.ok),
+        (0, w) => (attention(w), pal.warn),
+        (e, 0) => (depleted(e), pal.empty),
+        (e, w) => (format!("{} · {}", depleted(e), attention(w)), pal.warn),
     }
 }
 
@@ -609,9 +709,9 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-pub fn countdown(secs: i64) -> String {
+fn countdown(secs: i64, lang: Lang) -> String {
     if secs <= 0 {
-        return "agora".into();
+        return lang.t("agora", "now").into();
     }
     let m = secs / 60;
     let h = m / 60;
@@ -635,56 +735,83 @@ fn short_secs(s: i64) -> String {
     }
 }
 
-fn local_when(at: DateTime<Utc>) -> String {
+fn local_when(at: DateTime<Utc>, lang: Lang) -> String {
     use chrono::{Datelike, Timelike};
     let l = at.with_timezone(&Local);
     let today = Local::now().date_naive();
     let day = if l.date_naive() == today {
-        "hoje".to_string()
+        lang.t("hoje", "today").to_string()
     } else if l.date_naive() == today.succ_opt().unwrap_or(today) {
-        "amanhã".to_string()
+        lang.t("amanhã", "tomorrow").to_string()
     } else {
-        const WD: [&str; 7] = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"];
-        const MO: [&str; 12] = [
-            "jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez",
-        ];
-        format!(
-            "{}, {} {}",
-            WD[l.weekday().num_days_from_monday() as usize],
-            l.day(),
-            MO[l.month0() as usize]
-        )
+        let wd = l.weekday().num_days_from_monday() as usize;
+        let mo = l.month0() as usize;
+        match lang {
+            Lang::Pt => {
+                const WD: [&str; 7] = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"];
+                const MO: [&str; 12] = [
+                    "jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov",
+                    "dez",
+                ];
+                format!("{}, {} {}", WD[wd], l.day(), MO[mo])
+            }
+            Lang::En => {
+                const WD: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+                const MO: [&str; 12] = [
+                    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
+                    "Dec",
+                ];
+                format!("{}, {} {}", WD[wd], MO[mo], l.day())
+            }
+        }
     };
-    format!("{day} às {:02}:{:02}", l.hour(), l.minute())
+    format!(
+        "{day} {} {:02}:{:02}",
+        lang.t("às", "at"),
+        l.hour(),
+        l.minute()
+    )
 }
 
 /// Plain-language pace: will this window run out before it resets?
-fn pace_text(w: &Window, now: DateTime<Utc>) -> Option<String> {
+fn pace_text(w: &Window, now: DateTime<Utc>, lang: Lang) -> Option<String> {
     let t_left = w.time_left_fraction(now)?;
     let len = w.length?.as_secs_f32();
     let elapsed = (1.0 - t_left) * len;
     let used = 1.0 - w.remaining;
     if w.remaining <= 0.005 {
-        return Some("Esgotada até renovar".into());
+        return Some(
+            lang.t("Esgotada até renovar", "Depleted until it resets")
+                .into(),
+        );
     }
     if elapsed < len * 0.02 || used < 0.01 {
-        return Some("Ainda sem consumo relevante nesta janela".into());
+        return Some(
+            lang.t(
+                "Ainda sem consumo relevante nesta janela",
+                "No meaningful use in this window yet",
+            )
+            .into(),
+        );
     }
     let rate = used / elapsed; // fraction per second
     let to_empty = w.remaining / rate;
     let until_reset = t_left * len;
     if to_empty < until_reset {
-        Some(format!(
-            "Neste ritmo, acaba em {} — {} antes de renovar",
-            countdown(to_empty as i64),
-            countdown((until_reset - to_empty) as i64)
-        ))
+        let (a, b) = (
+            countdown(to_empty as i64, lang),
+            countdown((until_reset - to_empty) as i64, lang),
+        );
+        Some(match lang {
+            Lang::Pt => format!("Neste ritmo, acaba em {a} — {b} antes de renovar"),
+            Lang::En => format!("At this pace, runs out in {a} — {b} before it resets"),
+        })
     } else {
-        let leftover = (w.remaining - rate * until_reset).max(0.0);
-        Some(format!(
-            "Neste ritmo, sobram ~{}% na renovação",
-            pct(leftover)
-        ))
+        let leftover = pct((w.remaining - rate * until_reset).max(0.0));
+        Some(match lang {
+            Lang::Pt => format!("Neste ritmo, sobram ~{leftover}% na renovação"),
+            Lang::En => format!("At this pace, ~{leftover}% will be left at reset"),
+        })
     }
 }
 
@@ -740,4 +867,37 @@ fn refresh_icon(p: &Painter, c: Pos2, r: f32, rot: f32, color: Color32) {
         color,
         Stroke::NONE,
     ));
+}
+
+/// Sun (light), moon (dark) or monitor (follow the system).
+fn theme_icon(p: &Painter, c: Pos2, mode: ThemeMode, color: Color32, bg: Color32) {
+    let s = Stroke::new(1.5, color);
+    match mode {
+        ThemeMode::Light => {
+            p.circle_stroke(c, 3.4, s);
+            for i in 0..8 {
+                let d = Vec2::angled(i as f32 / 8.0 * TAU);
+                p.line_segment([c + d * 5.6, c + d * 7.6], s);
+            }
+        }
+        ThemeMode::Dark => {
+            p.circle_filled(c, 6.5, color);
+            p.circle_filled(c + vec2(3.2, -2.6), 5.4, bg);
+        }
+        ThemeMode::System => {
+            let screen = Rect::from_center_size(c - vec2(0.0, 1.5), vec2(14.0, 9.5));
+            p.rect_stroke(screen, 1.5, s, StrokeKind::Middle);
+            p.line_segment(
+                [pos2(c.x, screen.bottom()), pos2(c.x, screen.bottom() + 3.0)],
+                s,
+            );
+            p.line_segment(
+                [
+                    pos2(c.x - 3.5, screen.bottom() + 3.2),
+                    pos2(c.x + 3.5, screen.bottom() + 3.2),
+                ],
+                s,
+            );
+        }
+    }
 }
