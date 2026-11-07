@@ -55,6 +55,14 @@ Para ver a interface com dados fictícios, sem login nenhum:
 cargo run --release -- --demo
 ```
 
+## Instalar no Windows
+
+Compila, copia o app para `%LOCALAPPDATA%\Programs\AgentUsage` e cria o atalho "AgentUsage" na Área de Trabalho e no Menu Iniciar. Rode de novo depois de atualizar o código.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install.ps1
+```
+
 ## Licença
 
 MIT

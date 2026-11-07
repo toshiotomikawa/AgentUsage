@@ -175,6 +175,20 @@ impl eframe::App for App {
     }
 }
 
+fn window_icon() -> egui::IconData {
+    let img = image::load_from_memory(include_bytes!("../assets/icon.png"))
+        .map(|i| i.resize(128, 128, image::imageops::FilterType::Lanczos3))
+        .map(|i| i.to_rgba8());
+    match img {
+        Ok(rgba) => egui::IconData {
+            width: rgba.width(),
+            height: rgba.height(),
+            rgba: rgba.into_raw(),
+        },
+        Err(_) => egui::IconData::default(),
+    }
+}
+
 fn main() -> eframe::Result {
     let args = parse_args();
     let options = eframe::NativeOptions {
@@ -182,7 +196,8 @@ fn main() -> eframe::Result {
             .with_title("Agent Usage")
             .with_app_id("agent-usage")
             .with_inner_size(args.size)
-            .with_min_inner_size([380.0, 420.0]),
+            .with_min_inner_size([380.0, 420.0])
+            .with_icon(window_icon()),
         ..Default::default()
     };
     eframe::run_native(
