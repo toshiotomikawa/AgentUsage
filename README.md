@@ -31,7 +31,7 @@ fornecedor. Nenhum token sai do computador para qualquer outro lugar.
 | Codex | `~/.codex/auth.json` | `chatgpt.com/backend-api/wham/usage` |
 | Cursor & Grok | `%APPDATA%/Cursor/auth.json` | `api2.cursor.sh` (DashboardService) |
 | OpenCode Go | `~/.local/share/opencode` | `opencode.ai/zen/go/v1/usage` |
-| Antigravity | sessão do `agy` | comando `/usage` do `agy acp` (opcional) |
+| Antigravity | sessão do `agy` | `agy -p /usage --output-format json` (sem gastar tokens) |
 
 ## Configuração (opcional)
 
@@ -39,7 +39,7 @@ fornecedor. Nenhum token sai do computador para qualquer outro lugar.
 
 ```toml
 claude_dirs = ["C:/Users/voce/.claude-trabalho"]  # outras pastas de conta do Claude Code
-antigravity = true                                  # liga a leitura do Antigravity
+antigravity = false                                 # desliga a leitura do Antigravity
 refresh_secs = 60
 ```
 

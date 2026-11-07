@@ -3,8 +3,8 @@
 //! ```toml
 //! # Extra Claude Code config folders (one per account). ~/.claude and ~/.claude-* are found automatically.
 //! claude_dirs = ["C:/Users/me/.claude-work"]
-//! # Antigravity is read through `agy acp`; off by default because older CLIs answer `/usage` with a model turn.
-//! antigravity = true
+//! # Antigravity is read with `agy -p /usage` (no model turn). Set to false to skip it.
+//! antigravity = false
 //! # Seconds between automatic refreshes.
 //! refresh_secs = 60
 //! ```
@@ -24,7 +24,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             claude_dirs: Vec::new(),
-            antigravity: false,
+            antigravity: true,
             refresh_secs: 60,
         }
     }

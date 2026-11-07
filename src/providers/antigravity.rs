@@ -1,23 +1,20 @@
-//! Antigravity (Google) plan quota, read by asking the `agy acp` stdio server for `/usage`.
-//! Newer agy versions answer that command themselves with a Markdown "Quota Limits" section:
+//! Antigravity (Google) plan quota from `agy -p /usage --output-format json`.
 //!
-//! ```text
-//! ### Quota Limits
-//! - **Gemini Models**
-//!   - **5-hour Limit Remaining:** 99% remaining (resets Nov 7, 2026, 23:10 UTC)
-//!   - **Weekly Limit Remaining:** 0% remaining (resets Nov 8, 2026, 21:12 UTC)
+//! The CLI answers this command itself, without a model turn (0 tokens), and returns structured
+//! data under `command.data.groups[].buckets[]`:
+//!
+//! ```json
+//! {"name": "Gemini Models", "buckets": [
+//!   {"window": "5h", "remaining_fraction": 0.99, "reset_time": "2026-11-08T02:25:05Z"},
+//!   {"window": "weekly", "remaining_fraction": 1.0, "reset_time": "2026-11-14T21:25:05Z"}]}
 //! ```
-//!
-//! Opt-in (`antigravity = true` in the config) and polled at most every 10 minutes.
 
-use super::{Fetched, Source};
+use super::{Fetched, Source, parse_time};
 use crate::model::{Group, Provider, Window};
-use chrono::{NaiveDateTime, TimeZone, Utc};
-use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+use serde_json::Value;
+use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 pub fn source() -> Source {
@@ -25,16 +22,24 @@ pub fn source() -> Source {
         key: "antigravity".into(),
         provider: Provider::Antigravity,
         fetch: Arc::new(fetch),
-        min_interval: Some(600),
+        min_interval: None,
         optional: false,
     }
 }
 
 fn fetch() -> Result<Fetched, String> {
-    let answer = ask_usage()?;
-    let groups = parse(&answer);
+    let out = run_usage()?;
+    let v: Value =
+        serde_json::from_str(out.trim()).map_err(|_| "resposta inesperada do agy".to_string())?;
+    if v.get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s != "SUCCESS")
+    {
+        return Err("agy não conseguiu ler a cota".into());
+    }
+    let groups = parse(&v);
     if groups.is_empty() {
-        return Err("esta versão do agy não informa a cota".into());
+        return Err("sem cota de plano (login por chave de API?)".into());
     }
     Ok(Fetched {
         groups,
@@ -43,10 +48,10 @@ fn fetch() -> Result<Fetched, String> {
     })
 }
 
-fn ask_usage() -> Result<String, String> {
+fn run_usage() -> Result<String, String> {
     let mut cmd = Command::new("agy");
-    cmd.arg("acp")
-        .stdin(Stdio::piped())
+    cmd.args(["-p", "/usage", "--output-format", "json"])
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .current_dir(std::env::temp_dir());
@@ -56,150 +61,69 @@ fn ask_usage() -> Result<String, String> {
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let mut child = cmd.spawn().map_err(|_| "agy não encontrado".to_string())?;
-    let mut stdin = child.stdin.take().ok_or("agy sem stdin")?;
-    let stdout = child.stdout.take().ok_or("agy sem stdout")?;
-
-    let (tx, rx) = mpsc::channel::<Value>();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Ok(v) = serde_json::from_str::<Value>(&line)
-                && tx.send(v).is_err()
-            {
-                break;
-            }
-        }
+    let mut stdout = child.stdout.take().ok_or("agy sem saída")?;
+    let reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stdout.read_to_string(&mut s);
+        s
     });
-
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let mut send = |id: u64, method: &str, params: Value| -> Result<(), String> {
-        let msg = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
-        writeln!(stdin, "{msg}").map_err(|_| "agy fechou".to_string())?;
-        stdin.flush().map_err(|_| "agy fechou".to_string())
-    };
-    let mut text = String::new();
-    let wait = |id: u64, text: &mut String| -> Result<Value, String> {
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            let msg = rx
-                .recv_timeout(left)
-                .map_err(|_| "agy não respondeu".to_string())?;
-            if msg.get("method").and_then(Value::as_str) == Some("session/update") {
-                let u = &msg["params"]["update"];
-                if u["sessionUpdate"] == "agent_message_chunk"
-                    && let Some(t) = u["content"]["text"].as_str()
-                {
-                    text.push_str(t);
-                }
-            } else if msg.get("id").and_then(Value::as_u64) == Some(id)
-                && msg.get("method").is_none()
-            {
-                if let Some(e) = msg.get("error") {
-                    return Err(format!("agy: {}", e["message"].as_str().unwrap_or("erro")));
-                }
-                return Ok(msg["result"].clone());
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("agy não respondeu".into());
             }
         }
+    }
+    reader.join().map_err(|_| "agy falhou".to_string())
+}
+
+pub(crate) fn parse(v: &Value) -> Vec<Group> {
+    let Some(groups) = v.pointer("/command/data/groups").and_then(Value::as_array) else {
+        return Vec::new();
     };
-
-    let result = (|| {
-        send(
-            1,
-            "initialize",
-            json!({"protocolVersion": 1, "clientCapabilities": {}}),
-        )?;
-        wait(1, &mut text)?;
-        let cwd = std::env::temp_dir().to_string_lossy().to_string();
-        send(2, "session/new", json!({"cwd": cwd, "mcpServers": []}))?;
-        let session = wait(2, &mut text)?;
-        let sid = session["sessionId"]
-            .as_str()
-            .ok_or("agy sem sessão")?
-            .to_string();
-        send(
-            3,
-            "session/prompt",
-            json!({"sessionId": sid, "prompt": [{"type": "text", "text": "/usage"}]}),
-        )?;
-        wait(3, &mut text)?;
-        Ok(text.clone())
-    })();
-    let _ = child.kill();
-    let _ = child.wait();
-    result
-}
-
-pub(crate) fn parse(answer: &str) -> Vec<Group> {
-    let mut groups: Vec<Group> = Vec::new();
-    let mut in_section = false;
-    for line in answer.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('#') {
-            in_section = trimmed
-                .trim_start_matches('#')
-                .trim()
-                .eq_ignore_ascii_case("Quota Limits");
+    let mut out = Vec::new();
+    for g in groups {
+        let name = g.get("name").and_then(Value::as_str).unwrap_or("");
+        let mut windows = Vec::new();
+        for b in g
+            .get("buckets")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(rem) = b.get("remaining_fraction").and_then(Value::as_f64) else {
+                continue;
+            };
+            let (label, mins) = match b.get("window").and_then(Value::as_str) {
+                Some("5h") => ("5 horas", 300),
+                Some("weekly") => ("Semanal", 10_080),
+                Some("daily") => ("Diária", 1_440),
+                Some("monthly") => ("Mensal", 43_200),
+                _ => ("Limite", 0),
+            };
+            let mut w =
+                Window::new(label, rem as f32).resets(b.get("reset_time").and_then(parse_time));
+            if mins > 0 {
+                w = w.length_mins(mins);
+            }
+            windows.push(w);
+        }
+        if windows.is_empty() {
             continue;
         }
-        if !in_section {
-            continue;
-        }
-        let indented = line.starts_with(' ') || line.starts_with('\t');
-        // Group header: "- **Gemini Models**"
-        if !indented && let Some(name) = bold_only(trimmed.trim_start_matches('-').trim()) {
-            groups.push(Group {
-                name: short_group(&name),
-                windows: Vec::new(),
-            });
-            continue;
-        }
-        // Bucket: "  - **Weekly Limit Remaining:** 96% remaining (resets Oct 29, 2026, 10:12 UTC)"
-        let Some(group) = groups.last_mut() else {
-            continue;
-        };
-        let body = trimmed.trim_start_matches('-').trim();
-        let Some(rest) = body.strip_prefix("**") else {
-            continue;
-        };
-        let Some((bucket, after)) = rest.split_once(":**") else {
-            continue;
-        };
-        let after = after.trim();
-        let Some((pct, tail)) = after.split_once('%') else {
-            continue;
-        };
-        let Ok(pct) = pct.trim().parse::<f32>() else {
-            continue;
-        };
-        let reset = tail
-            .split_once("(resets ")
-            .and_then(|(_, r)| r.split_once(')'))
-            .and_then(|(r, _)| parse_reset(r));
-        let lower = bucket.to_lowercase();
-        let (label, mins) = if lower.contains("week") {
-            ("Semanal", 10_080)
-        } else if lower.contains("5-hour") || lower.contains("5 hour") || lower.contains("5h") {
-            ("5 horas", 300)
-        } else {
-            ("Limite", 0)
-        };
-        let mut w = Window::new(label, pct / 100.0).resets(reset);
-        if mins > 0 {
-            w = w.length_mins(mins);
-        }
-        group.windows.push(w);
+        // Shortest window first: 5 hours, then weekly.
+        windows.sort_by_key(|w| w.length.map(|d| d.as_secs()).unwrap_or(u64::MAX));
+        out.push(Group {
+            name: short_group(name),
+            windows,
+        });
     }
-    groups.retain(|g| !g.windows.is_empty());
-    for g in &mut groups {
-        // 5-hour first, then weekly.
-        g.windows
-            .sort_by_key(|w| w.length.map(|d| d.as_secs()).unwrap_or(u64::MAX));
-    }
-    groups
-}
-
-fn bold_only(s: &str) -> Option<String> {
-    let inner = s.strip_prefix("**")?.strip_suffix("**")?;
-    (!inner.contains("**")).then(|| inner.trim().to_string())
+    out
 }
 
 fn short_group(name: &str) -> String {
@@ -213,25 +137,28 @@ fn short_group(name: &str) -> String {
     }
 }
 
-fn parse_reset(s: &str) -> Option<chrono::DateTime<Utc>> {
-    let s = s.trim().trim_end_matches("UTC").trim();
-    let naive = NaiveDateTime::parse_from_str(s, "%b %d, %Y, %H:%M").ok()?;
-    Utc.from_local_datetime(&naive).single()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn parses_quota_section() {
-        let text = "Hello\n### Quota Limits\n- **Gemini Models**\n  *(Models within this group: Gemini Flash)*\n  - **Weekly Limit Remaining:** 96% remaining (resets Oct 29, 2026, 10:12 UTC)\n  - **5-hour Limit Remaining:** 40% remaining (resets Oct 22, 2026, 08:00 UTC)\n- **Claude and GPT models**\n  - **Weekly Limit Remaining:** 100% remaining\n### Other\n- **x**\n";
-        let g = parse(text);
-        assert_eq!(g.len(), 2);
+    fn parses_usage_command() {
+        let v: Value = serde_json::from_str(
+            r#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[
+              {"name":"Gemini Models","buckets":[
+                {"window":"weekly","remaining_fraction":0.5,"reset_time":"2026-11-14T21:25:05Z"},
+                {"window":"5h","remaining_fraction":0.99,"reset_time":"2026-11-08T02:25:05Z"}]},
+              {"name":"Claude and GPT models","buckets":[{"window":"5h","remaining_fraction":1}]},
+              {"name":"Gemini 4 Argon","buckets":[{"window":"weekly","remaining_fraction":0.98}]}]}}}"#,
+        )
+        .unwrap();
+        let g = parse(&v);
+        assert_eq!(g.len(), 3);
         assert_eq!(g[0].name, "Gemini");
         assert_eq!(g[0].windows[0].label, "5 horas");
-        assert!((g[0].windows[1].remaining - 0.96).abs() < 1e-4);
+        assert!((g[0].windows[1].remaining - 0.5).abs() < 1e-4);
         assert!(g[0].windows[1].resets_at.is_some());
         assert_eq!(g[1].name, "Claude & GPT");
+        assert_eq!(g[2].name, "Gemini 4 Argon");
     }
 }
