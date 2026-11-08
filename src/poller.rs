@@ -29,7 +29,7 @@ impl Poller {
                 key: s.key.clone(),
                 provider: s.provider,
                 title: None,
-                account: None,
+                account: s.account.clone(),
                 reading: Reading::Loading,
                 fetched_at: None,
             })
@@ -95,14 +95,14 @@ fn spawn_fetch(src: Source, shared: Arc<Mutex<Shared>>, ctx: eframe::egui::Conte
             match result {
                 Ok(f) => {
                     acc.reading = Reading::Ok(f.groups);
-                    acc.account = f.account;
+                    acc.account = f.account.or_else(|| src.account.clone());
                     acc.title = f.title;
                     acc.fetched_at = Some(Utc::now());
                 }
                 Err(e) => {
                     // Keep the last good reading through a transient failure.
                     if !matches!(acc.reading, Reading::Ok(_)) {
-                        if src.optional {
+                        if src.optional && !crate::providers::is_transient(&e) {
                             let key = src.key.clone();
                             s.accounts.retain(|a| a.key != key);
                         } else {

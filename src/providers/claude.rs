@@ -6,9 +6,22 @@ use crate::config::Config;
 use crate::model::{Group, Provider, Window, email_local_part};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 const URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const EXPIRED: &str = "login expirado — abra o Claude Code nesta conta";
+const MIN_INTERVAL_SECS: u64 = 300;
+/// Longest wait after repeated rate-limit answers.
+const MAX_BACKOFF: Duration = Duration::from_secs(30 * 60);
+
+/// Pause after a rate-limit answer: no request goes out before `until`, and each further 429
+/// doubles the pause, so the limit gets the quiet time it needs to reset.
+#[derive(Default)]
+struct Backoff {
+    until: Option<Instant>,
+    wait: Duration,
+}
 
 pub fn sources(cfg: &Config) -> Vec<Source> {
     // (folder, optional): folders found by name only are optional and hide when unreadable.
@@ -51,12 +64,23 @@ pub fn sources(cfg: &Config) -> Vec<Source> {
 
     dirs.into_iter()
         .enumerate()
-        .map(|(i, (dir, optional))| Source {
-            key: format!("claude-{i}"),
-            provider: Provider::Claude,
-            fetch: Arc::new(move || fetch(&dir)),
-            min_interval: None,
-            optional,
+        .map(|(i, (dir, optional))| {
+            // Until a read succeeds the account behind the token is unknown (the email files
+            // follow whichever login ran last), so name the folder instead.
+            let account = dir
+                .file_name()
+                .map(|n| format!("~/{}", n.to_string_lossy()));
+            let backoff = Arc::new(Mutex::new(Backoff::default()));
+            Source {
+                key: format!("claude-{i}"),
+                provider: Provider::Claude,
+                fetch: Arc::new(move || fetch(&dir, &backoff)),
+                // The usage endpoint rate-limits frequent callers; Claude Code itself reads it
+                // rarely. Its numbers move slowly, so a few minutes between reads loses nothing.
+                min_interval: Some(MIN_INTERVAL_SECS),
+                optional,
+                account,
+            }
         })
         .collect()
 }
@@ -73,20 +97,57 @@ fn account_email(dir: &Path) -> Option<String> {
     })
 }
 
-fn fetch(dir: &Path) -> Result<Fetched, String> {
+fn fetch(dir: &Path, backoff: &Mutex<Backoff>) -> Result<Fetched, String> {
     let creds = read_json(&dir.join(".credentials.json"))?;
-    let token = creds
-        .pointer("/claudeAiOauth/accessToken")
+    let oauth = creds
+        .get("claudeAiOauth")
+        .ok_or("sem login por assinatura")?;
+    let token = oauth
+        .get("accessToken")
         .and_then(Value::as_str)
         .ok_or("sem login por assinatura")?;
+    // Claude Code renews the token only while it runs with this folder; an expired one is
+    // refused anyway, so say so instead of asking.
+    let expires_ms = oauth.get("expiresAt").and_then(Value::as_i64);
+    if expires_ms.is_some_and(|ms| ms <= chrono::Utc::now().timestamp_millis()) {
+        return Err(EXPIRED.into());
+    }
+    if backoff
+        .lock()
+        .unwrap()
+        .until
+        .is_some_and(|t| Instant::now() < t)
+    {
+        return Err(status_error(429));
+    }
     let mut resp = agent()
         .get(URL)
         .header("Authorization", &format!("Bearer {token}"))
         .header("anthropic-beta", "oauth-2025-04-20")
         .call()
         .map_err(|_| "sem conexão".to_string())?;
+    let code = resp.status().as_u16();
+    if code == 429 {
+        let retry_after = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(Duration::from_secs);
+        let mut b = backoff.lock().unwrap();
+        b.wait = (b.wait * 2)
+            .max(Duration::from_secs(MIN_INTERVAL_SECS))
+            .max(retry_after.unwrap_or_default())
+            .min(MAX_BACKOFF);
+        b.until = Some(Instant::now() + b.wait);
+        return Err(status_error(429));
+    }
+    *backoff.lock().unwrap() = Backoff::default();
+    if code == 401 {
+        return Err(EXPIRED.into());
+    }
     if !resp.status().is_success() {
-        return Err(status_error(resp.status().as_u16()));
+        return Err(status_error(code));
     }
     let body: Value = resp
         .body_mut()

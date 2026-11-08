@@ -34,6 +34,8 @@ pub struct Source {
     pub min_interval: Option<u64>,
     /// Auto-discovered extra account: hidden instead of shown as "no data" when it cannot be read.
     pub optional: bool,
+    /// Account label known before any fetch (shown even when the fetch fails).
+    pub account: Option<String>,
 }
 
 pub fn discover(cfg: &Config) -> Vec<Source> {
@@ -62,6 +64,11 @@ pub(crate) fn agent() -> ureq::Agent {
 pub(crate) fn read_json(path: &Path) -> Result<Value, String> {
     let text = std::fs::read_to_string(path).map_err(|_| "não conectado".to_string())?;
     serde_json::from_str(&text).map_err(|_| "arquivo de login ilegível".to_string())
+}
+
+/// A failure that says nothing about whether the account exists (rate limit, network, server).
+pub(crate) fn is_transient(err: &str) -> bool {
+    err == status_error(429) || err == "sem conexão" || err.starts_with("serviço respondeu 5")
 }
 
 pub(crate) fn status_error(code: u16) -> String {

@@ -49,6 +49,10 @@ const DATA: &[(&str, &str)] = &[
         "login expired — open the agent to renew it",
     ),
     (
+        "login expirado — abra o Claude Code nesta conta",
+        "login expired — open Claude Code with this account",
+    ),
+    (
         "limite de consultas — tentando de novo em breve",
         "rate-limited — retrying soon",
     ),
@@ -91,7 +95,7 @@ fn translate_part(part: &str) -> String {
         return format!("service answered {code}");
     }
     let lower = part.to_lowercase();
-    let Some((_, en)) = DATA.iter().find(|(pt, _)| *pt == lower) else {
+    let Some((_, en)) = DATA.iter().find(|(pt, _)| pt.to_lowercase() == lower) else {
         return part.to_string();
     };
     // Keep the original capitalization of the first letter.
@@ -113,6 +117,10 @@ mod tests {
         assert_eq!(Lang::En.data("Semanal"), "Weekly");
         assert_eq!(Lang::En.data("Auto · semanal"), "Auto · weekly");
         assert_eq!(Lang::En.data("sem conexão"), "offline");
+        assert_eq!(
+            Lang::En.data("login expirado — abra o Claude Code nesta conta"),
+            "login expired — open Claude Code with this account"
+        );
         assert_eq!(
             Lang::En.data("serviço respondeu 500"),
             "service answered 500"
