@@ -1,7 +1,8 @@
 //! Claude Code subscription limits: `GET api.anthropic.com/api/oauth/usage` with the OAuth token
 //! Claude Code keeps in `<config dir>/.credentials.json`. One source per config folder (account).
 
-use super::{Fetched, Source, agent, parse_time, read_json, status_error};
+use super::claude_login::{EXPIRED, Renewal, near_expiry, read_login, renew};
+use super::{Fetched, Source, agent, parse_time, status_error};
 use crate::config::Config;
 use crate::model::{Group, Provider, Window, email_local_part};
 use serde_json::Value;
@@ -10,12 +11,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const URL: &str = "https://api.anthropic.com/api/oauth/usage";
-const EXPIRED: &str = "login expirado — entre de novo no Claude Code";
-/// Claude Code's own sign-in service and app id: the token is renewed the same way it does.
-const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
-const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-/// Renew a little before the token runs out, not on the edge.
-const RENEW_MARGIN_MS: i64 = 60_000;
 const MIN_INTERVAL_SECS: u64 = 300;
 /// Longest wait after repeated rate-limit answers.
 const MAX_BACKOFF: Duration = Duration::from_secs(30 * 60);
@@ -78,10 +73,11 @@ pub fn sources(cfg: &Config) -> Vec<Source> {
                 .file_name()
                 .map(|n| format!("~/{}", n.to_string_lossy()));
             let backoff = Arc::new(Mutex::new(Backoff::default()));
+            let renewal = Arc::new(Mutex::new(Renewal::default()));
             Source {
                 key: format!("claude-{i}"),
                 provider: Provider::Claude,
-                fetch: Arc::new(move || fetch(&dir, &backoff)),
+                fetch: Arc::new(move || fetch(&dir, &backoff, &renewal)),
                 // The usage endpoint rate-limits frequent callers; Claude Code itself reads it
                 // rarely. Its numbers move slowly, so a few minutes between reads loses nothing.
                 min_interval: Some(MIN_INTERVAL_SECS),
@@ -131,7 +127,7 @@ fn token_account(token: &str, backoff: &Mutex<Backoff>) -> Option<String> {
 }
 
 /// `Retry-After` as seconds or as an HTTP date.
-fn parse_retry_after(v: &str) -> Option<Duration> {
+pub(super) fn parse_retry_after(v: &str) -> Option<Duration> {
     let v = v.trim();
     if let Ok(secs) = v.parse::<u64>() {
         return Some(Duration::from_secs(secs));
@@ -142,142 +138,12 @@ fn parse_retry_after(v: &str) -> Option<Duration> {
         .ok()
 }
 
-/// The stored login: access token, refresh token, expiry (ms) and scopes.
-struct Login {
-    token: String,
-    refresh: Option<String>,
-    expires_ms: Option<i64>,
-    scopes: Vec<String>,
-}
-
-fn read_login(path: &Path) -> Result<(Value, Login), String> {
-    let creds = read_json(path)?;
-    let oauth = creds
-        .get("claudeAiOauth")
-        .ok_or("sem login por assinatura")?;
-    let token = oauth
-        .get("accessToken")
-        .and_then(Value::as_str)
-        .ok_or("sem login por assinatura")?
-        .to_string();
-    let login = Login {
-        token,
-        refresh: oauth
-            .get("refreshToken")
-            .and_then(Value::as_str)
-            .map(String::from),
-        expires_ms: oauth.get("expiresAt").and_then(Value::as_i64),
-        scopes: oauth
-            .get("scopes")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(Value::as_str)
-                    .map(String::from)
-                    .collect()
-            })
-            .unwrap_or_default(),
-    };
-    Ok((creds, login))
-}
-
-fn near_expiry(login: &Login) -> bool {
-    login
-        .expires_ms
-        .is_some_and(|ms| ms - RENEW_MARGIN_MS <= chrono::Utc::now().timestamp_millis())
-}
-
-/// Renew an expired login the way Claude Code does, and save it back to the same file, so no
-/// Claude Code window has to be opened for it. The file is read again first: a running Claude
-/// Code may have renewed it already, and its newer token wins.
-/// `refused` is a token the service just turned down even though it had not expired.
-fn renew(path: &Path, refused: Option<&str>) -> Result<Login, String> {
-    let (mut creds, login) = read_login(path)?;
-    if !near_expiry(&login) && refused != Some(login.token.as_str()) {
-        return Ok(login);
-    }
-    let refresh = login.refresh.clone().ok_or(EXPIRED)?;
-    let mut body = serde_json::json!({
-        "grant_type": "refresh_token",
-        "refresh_token": refresh,
-        "client_id": CLIENT_ID,
-    });
-    if !login.scopes.is_empty() {
-        body["scope"] = Value::from(login.scopes.join(" "));
-    }
-    let mut resp = agent()
-        .post(TOKEN_URL)
-        .header("Content-Type", "application/json")
-        .send(body.to_string())
-        .map_err(|_| "sem conexão".to_string())?;
-    let code = resp.status().as_u16();
-    match code {
-        200 => {}
-        // The refresh token itself was refused: only a new sign-in helps.
-        400 | 401 | 403 => return Err(EXPIRED.into()),
-        c => return Err(status_error(c)),
-    }
-    let v: Value = resp
-        .body_mut()
-        .read_json()
-        .map_err(|_| "resposta inesperada".to_string())?;
-    let token = v
-        .get("access_token")
-        .and_then(Value::as_str)
-        .ok_or("resposta inesperada")?;
-    let expires_in = v
-        .get("expires_in")
-        .and_then(Value::as_i64)
-        .ok_or("resposta inesperada")?;
-    let new_refresh = v
-        .get("refresh_token")
-        .and_then(Value::as_str)
-        .unwrap_or(&refresh)
-        .to_string();
-    let expires_ms = chrono::Utc::now().timestamp_millis() + expires_in.saturating_mul(1000);
-    let oauth = creds
-        .get_mut("claudeAiOauth")
-        .and_then(Value::as_object_mut)
-        .ok_or("sem login por assinatura")?;
-    oauth.insert("accessToken".into(), token.into());
-    oauth.insert("refreshToken".into(), new_refresh.clone().into());
-    oauth.insert("expiresAt".into(), expires_ms.into());
-    let scopes = match v.get("scope").and_then(Value::as_str) {
-        Some(s) => {
-            let list: Vec<String> = s.split_whitespace().map(String::from).collect();
-            oauth.insert("scopes".into(), list.clone().into());
-            list
-        }
-        None => login.scopes,
-    };
-    save(path, &creds)?;
-    Ok(Login {
-        token: token.to_string(),
-        refresh: Some(new_refresh),
-        expires_ms: Some(expires_ms),
-        scopes,
-    })
-}
-
-/// Replace the file in one step, so Claude Code never reads half of it.
-fn save(path: &Path, creds: &Value) -> Result<(), String> {
-    let tmp = path.with_extension("json.agent-usage.tmp");
-    let text = serde_json::to_string(creds).map_err(|_| "falha ao salvar o login")?;
-    std::fs::write(&tmp, text)
-        .and_then(|()| std::fs::rename(&tmp, path))
-        .map_err(|_| {
-            let _ = std::fs::remove_file(&tmp);
-            "falha ao salvar o login".to_string()
-        })
-}
-
-fn fetch(dir: &Path, backoff: &Mutex<Backoff>) -> Result<Fetched, String> {
-    let path = dir.join(".credentials.json");
-    let (_, mut login) = read_login(&path)?;
-    // Claude Code renews the token only while it runs; renew it here when it has run out.
-    if near_expiry(&login) {
-        login = renew(&path, None)?;
-    }
+fn fetch(
+    dir: &Path,
+    backoff: &Mutex<Backoff>,
+    renewal: &Mutex<Renewal>,
+) -> Result<Fetched, String> {
+    let (_, mut login) = read_login(&dir.join(".credentials.json"))?;
     if backoff
         .lock()
         .unwrap()
@@ -285,6 +151,13 @@ fn fetch(dir: &Path, backoff: &Mutex<Backoff>) -> Result<Fetched, String> {
         .is_some_and(|t| Instant::now() < t)
     {
         return Err(status_error(429));
+    }
+    // Claude Code renews the token only while it runs; renew it here when it has run out (or
+    // save a renewal still waiting to be written).
+    let mut renewed = false;
+    if near_expiry(&login) || renewal.lock().unwrap().has_pending() {
+        login = renew(dir, None, renewal)?;
+        renewed = true;
     }
     let usage = |token: &str| {
         agent()
@@ -295,12 +168,10 @@ fn fetch(dir: &Path, backoff: &Mutex<Backoff>) -> Result<Fetched, String> {
             .map_err(|_| "sem conexão".to_string())
     };
     let mut resp = usage(&login.token)?;
-    if resp.status().as_u16() == 401 && login.refresh.is_some() {
+    if resp.status().as_u16() == 401 && !renewed && login.refresh.is_some() {
         // Revoked before its expiry (a sign-in elsewhere, say): renew once and ask again.
-        if let Ok(l) = renew(&path, Some(&login.token)) {
-            login = l;
-            resp = usage(&login.token)?;
-        }
+        login = renew(dir, Some(&login.token), renewal)?;
+        resp = usage(&login.token)?;
     }
     let code = resp.status().as_u16();
     if code == 429 {
@@ -378,33 +249,18 @@ mod tests {
     #[test]
     #[ignore]
     fn live_usage() {
-        for src in sources(&Config::default()) {
+        let mut failed = 0;
+        for (i, src) in sources(&Config::default()).iter().enumerate() {
             let r = (src.fetch)().map(|f| f.groups.len());
-            println!("{:?}: {r:?}", src.account);
+            // Numbered, not named: folder names can identify a person.
+            println!(
+                "conta {}: {}",
+                i + 1,
+                r.as_ref().map_or_else(|e| e.as_str(), |_| "ok")
+            );
+            failed += r.is_err() as usize;
         }
-    }
-
-    #[test]
-    fn saved_login_keeps_other_fields() {
-        let dir = std::env::temp_dir().join(format!("agent-usage-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(".credentials.json");
-        std::fs::write(
-            &path,
-            r#"{"other":1,"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":1,"scopes":["x","y"],"subscriptionType":"pro"}}"#,
-        )
-        .unwrap();
-        let (mut creds, login) = read_login(&path).unwrap();
-        assert!(near_expiry(&login));
-        assert_eq!(login.scopes, ["x", "y"]);
-        creds["claudeAiOauth"]["accessToken"] = "b".into();
-        save(&path, &creds).unwrap();
-        let (again, login) = read_login(&path).unwrap();
-        assert_eq!(login.token, "b");
-        assert_eq!(again["other"], 1);
-        assert_eq!(again["claudeAiOauth"]["subscriptionType"], "pro");
-        assert!(!path.with_extension("json.agent-usage.tmp").exists());
-        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(failed, 0, "{failed} conta(s) sem dados");
     }
 
     #[test]

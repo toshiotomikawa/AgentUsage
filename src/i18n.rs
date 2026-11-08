@@ -53,6 +53,10 @@ const DATA: &[(&str, &str)] = &[
         "login expired — sign in to Claude Code again",
     ),
     (
+        "login em renovação — tentando de novo em breve",
+        "renewing sign-in — retrying soon",
+    ),
+    (
         "limite de consultas — tentando de novo em breve",
         "rate-limited — retrying soon",
     ),

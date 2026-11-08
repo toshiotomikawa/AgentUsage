@@ -3,6 +3,7 @@
 
 mod antigravity;
 mod claude;
+mod claude_login;
 mod codex;
 mod cursor;
 mod opencode;
@@ -90,6 +91,7 @@ pub(crate) fn is_transient(err: &str) -> bool {
     err == status_error(429)
         || err == "sem conexão"
         || err == "resposta inesperada"
+        || err == claude_login::BUSY
         || err.starts_with("serviço respondeu 5")
 }
 

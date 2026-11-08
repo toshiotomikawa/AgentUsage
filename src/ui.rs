@@ -126,10 +126,41 @@ impl Dashboard {
         let lang = f.lang;
 
         let full = ui.max_rect();
-        let outer = (full.width() * 0.045).clamp(16.0, 56.0);
-        let content_w = (full.width() - outer * 2.0).min(1280.0);
-        let left = full.center().x - content_w / 2.0;
-        let top = full.top() + outer * 0.45;
+        let mut cards: Vec<&Account> = f.accounts.iter().collect();
+        cards.sort_by(|a, b| {
+            a.title()
+                .to_lowercase()
+                .cmp(&b.title().to_lowercase())
+                .then(a.account.cmp(&b.account))
+                .then(a.key.cmp(&b.key))
+        });
+        // Everything must fit without scrolling: when even the densest layout does not, scale
+        // the whole window down (largest zoom that fits, never above the system's).
+        let zoom = ui.ctx().zoom_factor();
+        let want = (0..=10)
+            .map(|i| 1.0 - i as f32 * 0.05)
+            .find(|&z| {
+                let r = Rect::from_min_size(full.min, full.size() * zoom / z);
+                let g = Grid::plan(&cards, r);
+                g.total_h <= g.avail_h
+            })
+            .unwrap_or(0.5);
+        if (want - zoom).abs() > 0.01 {
+            ui.ctx().set_zoom_factor(want);
+            ui.ctx().request_repaint();
+        }
+        let Grid {
+            outer,
+            content_w,
+            left,
+            top,
+            grid_top,
+            cols,
+            m,
+            rows,
+            total_h,
+            ..
+        } = Grid::plan(&cards, full);
 
         // ---------- header ----------
         // Buttons on the right (GitHub, language, theme, refresh); the name centered, or
@@ -150,8 +181,10 @@ impl Dashboard {
         );
         let tw = title.size().x;
         let center_x = left + content_w / 2.0;
-        let tx = if center_x + tw / 2.0 > github_c.x - BTN_R - 12.0 {
-            left
+        // Centered on the window, or on the room left of the buttons when that would overlap.
+        let room = github_c.x - BTN_R - 12.0;
+        let tx = if center_x + tw / 2.0 > room {
+            ((left + room) / 2.0 - tw / 2.0).max(left)
         } else {
             center_x - tw / 2.0
         };
@@ -206,58 +239,10 @@ impl Dashboard {
         resp.on_hover_text(lang.t("Idioma", "Language"));
 
         // ---------- grid ----------
-        let compact = full.height() < 640.0;
-        let head_gap = if compact { 14.0 } else { 44.0 };
-        let grid_top = top + BTN_R * 2.0 + head_gap;
-        let avail_h = full.bottom() - grid_top - outer * if compact { 0.3 } else { 0.6 };
-
-        let mut cards: Vec<&Account> = f.accounts.iter().collect();
-        cards.sort_by(|a, b| {
-            a.title()
-                .to_lowercase()
-                .cmp(&b.title().to_lowercase())
-                .then(a.account.cmp(&b.account))
-                .then(a.key.cmp(&b.key))
-        });
         let mut per_provider: HashMap<_, usize> = HashMap::new();
         for a in &cards {
             *per_provider.entry(a.provider).or_default() += 1;
         }
-        let max_cols = if content_w >= 980.0 {
-            3
-        } else if content_w >= 620.0 {
-            2
-        } else {
-            1
-        };
-        // Pick the largest density that fits; when even the smallest does not, add a column
-        // (as long as cards stay readable) rather than scroll.
-        let fit = |cols: usize| {
-            let mut k = 1.0;
-            loop {
-                let m = Metrics::at(k);
-                let (rows, total_h) = grid_rows(&cards, cols, &m);
-                if total_h <= avail_h || k <= MIN_K {
-                    return (cols, m, rows, total_h);
-                }
-                k -= 0.05;
-            }
-        };
-        let n = cards.len().max(1);
-        let mut best = fit(max_cols.min(n));
-        let mut cols = best.0;
-        while best.3 > avail_h && cols < 3.min(n) {
-            cols += 1;
-            let gap = Metrics::at(MIN_K).gap;
-            if (content_w - gap * (cols - 1) as f32) / (cols as f32) < MIN_CARD_W {
-                break;
-            }
-            let next = fit(cols);
-            if next.3 < best.3 {
-                best = next;
-            }
-        }
-        let (cols, m, rows, total_h) = best;
         let card_w = (content_w - m.gap * (cols - 1) as f32) / cols as f32;
 
         let grid_rect = Rect::from_min_max(pos2(full.left(), grid_top), full.max);
@@ -657,6 +642,81 @@ struct RowCtx<'a> {
 
 /// Row-major grid: every card in a row shares the row's height.
 /// Returns (y, height) per row and the total height.
+/// Where everything goes for a window area: the densest layout that fits, or the smallest.
+struct Grid {
+    outer: f32,
+    content_w: f32,
+    left: f32,
+    top: f32,
+    grid_top: f32,
+    avail_h: f32,
+    cols: usize,
+    m: Metrics,
+    rows: Vec<(f32, f32)>,
+    total_h: f32,
+}
+
+impl Grid {
+    fn plan(cards: &[&Account], full: Rect) -> Grid {
+        let outer = (full.width() * 0.045).clamp(16.0, 56.0);
+        let content_w = (full.width() - outer * 2.0).min(1280.0);
+        let left = full.center().x - content_w / 2.0;
+        let top = full.top() + outer * 0.45;
+        let compact = full.height() < 640.0;
+        let head_gap = if compact { 14.0 } else { 44.0 };
+        let grid_top = top + BTN_R * 2.0 + head_gap;
+        let avail_h = full.bottom() - grid_top - outer * if compact { 0.3 } else { 0.6 };
+
+        let max_cols = if content_w >= 980.0 {
+            3
+        } else if content_w >= 620.0 {
+            2
+        } else {
+            1
+        };
+        // Pick the largest density that fits; when even the smallest does not, add a column
+        // (as long as cards stay readable).
+        let fit = |cols: usize| {
+            let mut k = 1.0;
+            loop {
+                let m = Metrics::at(k);
+                let (rows, total_h) = grid_rows(cards, cols, &m);
+                if total_h <= avail_h || k <= MIN_K {
+                    return (cols, m, rows, total_h);
+                }
+                k -= 0.05;
+            }
+        };
+        let n = cards.len().max(1);
+        let mut best = fit(max_cols.min(n));
+        let mut cols = best.0;
+        while best.3 > avail_h && cols < 3.min(n) {
+            cols += 1;
+            let gap = Metrics::at(MIN_K).gap;
+            if (content_w - gap * (cols - 1) as f32) / (cols as f32) < MIN_CARD_W {
+                break;
+            }
+            let next = fit(cols);
+            if next.3 < best.3 {
+                best = next;
+            }
+        }
+        let (cols, m, rows, total_h) = best;
+        Grid {
+            outer,
+            content_w,
+            left,
+            top,
+            grid_top,
+            avail_h,
+            cols,
+            m,
+            rows,
+            total_h,
+        }
+    }
+}
+
 fn grid_rows(cards: &[&Account], cols: usize, m: &Metrics) -> (Vec<(f32, f32)>, f32) {
     let mut out = Vec::new();
     let mut y = 0.0;
