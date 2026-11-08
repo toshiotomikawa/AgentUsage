@@ -162,7 +162,6 @@ impl eframe::App for App {
             now,
             lang: self.prefs.lang,
             theme: self.prefs.theme,
-            icons: &self.icons,
         };
         let act = self.dash.show(&mut body_ui, &pal, f);
         chrome::frame_edges(ui, &pal, full);

@@ -111,14 +111,6 @@ fn fetch(dir: &Path) -> Result<Fetched, String> {
     add("five_hour", "5 horas", 300);
     add("seven_day", "Semanal", 10_080);
 
-    if let Some(extra) = body
-        .get("extra_usage")
-        .filter(|e| e.get("is_enabled").and_then(Value::as_bool) == Some(true))
-        && let Some(used) = extra.get("utilization").and_then(Value::as_f64)
-    {
-        windows.push(Window::new("Gasto mensal", 1.0 - used as f32 / 100.0));
-    }
-
     if windows.is_empty() {
         return Err("sem limites informados".into());
     }

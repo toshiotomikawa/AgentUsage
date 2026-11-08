@@ -3,7 +3,7 @@
 
 use crate::anim::{Tweens, ease_in_out, ease_out_cubic};
 use crate::i18n::Lang;
-use crate::icons::{self, Icons};
+use crate::icons;
 use crate::model::{Account, Reading, Status, Window};
 use crate::prefs::ThemeMode;
 use crate::theme::{Palette, SEMIBOLD};
@@ -23,7 +23,6 @@ pub struct Frame<'a> {
     pub now: DateTime<Utc>,
     pub lang: Lang,
     pub theme: ThemeMode,
-    pub icons: &'a Icons,
 }
 
 /// What the user asked for this frame.
@@ -365,11 +364,11 @@ impl Dashboard {
         let inner = rect.shrink(m.pad);
         let hy = inner.top() + m.head / 2.0;
         let icon = Rect::from_min_size(pos2(inner.left(), hy - 11.0), vec2(22.0, 22.0));
-        icons::paint(
+        icons::paint_provider(
             ui,
-            f.icons.provider(acc.provider),
-            icon,
-            6.0,
+            acc.provider,
+            icon.shrink(1.0),
+            pal.text,
             if unavailable { a * 0.5 } else { a },
         );
         let title_font = FontId::new(15.5, FontFamily::Name(SEMIBOLD.into()));

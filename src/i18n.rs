@@ -19,7 +19,6 @@ const DATA: &[(&str, &str)] = &[
     ("curta", "short"),
     ("ciclo", "cycle"),
     ("limite", "limit"),
-    ("gasto mensal", "monthly spend"),
     ("agy falhou", "agy failed"),
     (
         "agy não conseguiu ler a cota",
