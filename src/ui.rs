@@ -6,7 +6,7 @@ use crate::i18n::Lang;
 use crate::icons;
 use crate::model::{Account, Reading, Status, Window};
 use crate::prefs::ThemeMode;
-use crate::theme::{MONO, MONO_SEMIBOLD, Palette, SEMIBOLD};
+use crate::theme::{Palette, SEMIBOLD};
 use chrono::{DateTime, Local, Utc};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontFamily, FontId, Painter, Pos2, Rect, Response, Sense,
@@ -56,7 +56,7 @@ impl Metrics {
     fn at(k: f32) -> Self {
         Self {
             pad: 20.0 * k.max(0.8),
-            head: 30.0,
+            head: 40.0,
             row: 50.0 * k,
             group: 26.0 * k,
             gap: 16.0 * k.max(0.75),
@@ -68,6 +68,9 @@ const BAR_H: f32 = 6.0;
 /// Densest layout: rows stay readable (label line plus bar) down to this scale.
 const MIN_K: f32 = 0.6;
 const BTN_R: f32 = 18.0;
+/// Concentric status rings: radii (outer hours, middle week, inner month) and stroke width.
+const RING_R: [f32; 3] = [17.0, 12.0, 7.0];
+const RING_W: f32 = 3.2;
 /// Narrowest card that still reads well, used before falling back to scrolling.
 const MIN_CARD_W: f32 = 220.0;
 
@@ -126,7 +129,8 @@ impl Dashboard {
         let lang = f.lang;
 
         let full = ui.max_rect();
-        let mut cards: Vec<&Account> = f.accounts.iter().collect();
+        let merged = crate::model::merge_claude(f.accounts);
+        let mut cards: Vec<&Account> = merged.iter().collect();
         cards.sort_by(|a, b| {
             a.title()
                 .to_lowercase()
@@ -450,41 +454,46 @@ impl Dashboard {
                 );
             }
             Reading::Ok(groups) => {
-                // Status ring: the tightest window.
-                if let Some(b) = acc.binding() {
-                    let st = b.status(f.now);
+                // Concentric rings, outer to inner: hours, week, month (the tightest window
+                // of each). Same place and size on every card; a ring shows only if it applies.
+                let rc = pos2(inner.right() - RING_R[0] - RING_W / 2.0, hy);
+                let mut tip = Vec::new();
+                for (i, w) in acc.by_period().into_iter().enumerate() {
+                    let Some(w) = w else { continue };
+                    let st = w.status(f.now);
                     let v = self.tweens.get(
-                        &format!("ring:{}", acc.key),
-                        b.remaining,
+                        &format!("ring:{}:{i}", acc.key),
+                        w.remaining,
                         0.0,
                         now,
                         0.3,
-                        0.05 + idx as f32 * 0.03,
+                        0.05 + idx as f32 * 0.03 + i as f32 * 0.04,
                     );
-                    let rc = pos2(inner.right() - 9.0, hy);
-                    let ring_track = if st == Status::Empty {
+                    let track = if st == Status::Empty {
                         lerp_color(pal.track, pal.empty, 0.45)
                     } else {
                         pal.track
                     };
-                    p.circle_stroke(rc, 8.0, Stroke::new(2.4, ring_track.gamma_multiply(a)));
+                    p.circle_stroke(rc, RING_R[i], Stroke::new(RING_W, track.gamma_multiply(a)));
                     arc(
                         &p,
                         rc,
-                        8.0,
+                        RING_R[i],
                         v,
-                        Stroke::new(2.4, pal.status(st).gamma_multiply(a)),
+                        Stroke::new(RING_W, pal.status(st).gamma_multiply(a)),
                     );
-                    let ring_rect = Rect::from_center_size(rc, vec2(24.0, 24.0));
+                    tip.push(format!("{} · {}%", lang.data(&w.label), pct(w.remaining)));
+                }
+                if !tip.is_empty() {
+                    let ring_rect = Rect::from_center_size(rc, Vec2::splat(RING_R[0] * 2.0 + 6.0));
                     ui.interact(
                         ring_rect,
                         ui.scope_id().with(("ring", &acc.key)),
                         Sense::hover(),
                     )
-                    .on_hover_text(format!(
-                        "{} · {}%",
-                        lang.data(&b.label),
-                        pct(b.remaining)
+                    .on_hover_text(tip.join(
+                        "
+",
                     ));
                 }
                 let mut y = body_top;
@@ -545,7 +554,7 @@ impl Dashboard {
         // Right side: countdown (muted), then the percentage.
         let pct_g = p.layout_no_wrap(
             format!("{}%", pct(v)),
-            FontId::new(13.5, FontFamily::Name(MONO_SEMIBOLD.into())),
+            FontId::new(13.5, FontFamily::Name(SEMIBOLD.into())),
             pal.text.gamma_multiply(a),
         );
         let pct_w = pct_g.size().x;
@@ -560,7 +569,7 @@ impl Dashboard {
                 pos2(row.right() - pct_w - 10.0, line_y + 0.5),
                 Align2::RIGHT_CENTER,
                 countdown(left, lang),
-                FontId::new(11.5, FontFamily::Name(MONO.into())),
+                FontId::proportional(12.0),
                 pal.muted.gamma_multiply(a * 0.8),
             );
         }

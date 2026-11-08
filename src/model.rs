@@ -139,12 +139,92 @@ impl Account {
         };
         groups.iter().flat_map(|g| g.windows.iter())
     }
+}
 
-    /// The window that will stop work first: lowest remaining.
-    pub fn binding(&self) -> Option<&Window> {
-        self.windows()
-            .min_by(|a, b| a.remaining.total_cmp(&b.remaining))
+/// How long a window lasts, for the concentric rings: outer, middle and inner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Period {
+    Hours,
+    Week,
+    Month,
+}
+
+impl Window {
+    pub fn period(&self) -> Period {
+        match self.length.map(|d| d.as_secs()) {
+            Some(s) if s <= 24 * 3600 => Period::Hours,
+            Some(s) if s <= 8 * 24 * 3600 => Period::Week,
+            _ => Period::Month,
+        }
     }
+}
+
+impl Account {
+    /// The tightest window of each period (hours, week, month), if the account has one.
+    pub fn by_period(&self) -> [Option<&Window>; 3] {
+        let mut out: [Option<&Window>; 3] = [None; 3];
+        for w in self.windows() {
+            let i = w.period() as usize;
+            if out[i].is_none_or(|b| w.remaining < b.remaining) {
+                out[i] = Some(w);
+            }
+        }
+        out
+    }
+}
+
+/// All Claude accounts as one card, one group per account (alphabetical). Folders signed in to
+/// the same account show once, with the most recent reading.
+pub fn merge_claude(accounts: &[Account]) -> Vec<Account> {
+    let (claude, mut out): (Vec<&Account>, Vec<&Account>) = accounts
+        .iter()
+        .partition(|a| a.provider == Provider::Claude);
+    let mut out: Vec<Account> = out.drain(..).cloned().collect();
+    if claude.is_empty() {
+        return out;
+    }
+    let mut ok: Vec<(String, &Account, &Vec<Group>)> = Vec::new();
+    for a in &claude {
+        if let Reading::Ok(groups) = &a.reading {
+            let name = a.account.clone().unwrap_or_default();
+            match ok.iter_mut().find(|(n, _, _)| *n == name) {
+                Some(slot) if slot.1.fetched_at < a.fetched_at => *slot = (name, a, groups),
+                Some(_) => {}
+                None => ok.push((name, a, groups)),
+            }
+        }
+    }
+    ok.sort_by_key(|x| x.0.to_lowercase());
+    let reading = if !ok.is_empty() {
+        let single = ok.len() == 1;
+        Reading::Ok(
+            ok.iter()
+                .map(|(name, _, groups)| Group {
+                    name: if single { String::new() } else { name.clone() },
+                    windows: groups.iter().flat_map(|g| g.windows.clone()).collect(),
+                })
+                .collect(),
+        )
+    } else if claude.iter().any(|a| matches!(a.reading, Reading::Loading)) {
+        Reading::Loading
+    } else {
+        claude
+            .iter()
+            .find_map(|a| match &a.reading {
+                Reading::Unavailable(r) => Some(Reading::Unavailable(r.clone())),
+                _ => None,
+            })
+            .unwrap_or(Reading::Loading)
+    };
+    out.push(Account {
+        key: "claude".into(),
+        provider: Provider::Claude,
+        title: None,
+        account: None,
+        reading,
+        fetched_at: ok.iter().filter_map(|(_, a, _)| a.fetched_at).max(),
+    });
+    out
 }
 
 pub fn email_local_part(email: &str) -> String {
@@ -179,6 +259,41 @@ mod tests {
 #[cfg(test)]
 mod limit_tests {
     use super::*;
+
+    fn claude(key: &str, name: &str, rem: f32, at: i64) -> Account {
+        Account {
+            key: key.into(),
+            provider: Provider::Claude,
+            title: None,
+            account: Some(name.into()),
+            reading: Reading::Ok(vec![Group {
+                name: String::new(),
+                windows: vec![Window::new("5 horas", rem).length_mins(300)],
+            }]),
+            fetched_at: DateTime::from_timestamp(at, 0),
+        }
+    }
+
+    #[test]
+    fn claude_accounts_merge_into_one_card() {
+        let accs = vec![
+            claude("c0", "b", 0.5, 10),
+            claude("c1", "a", 0.9, 10),
+            claude("c2", "b", 0.4, 20),
+        ];
+        let out = merge_claude(&accs);
+        assert_eq!(out.len(), 1);
+        let Reading::Ok(groups) = &out[0].reading else {
+            panic!()
+        };
+        let names: Vec<_> = groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, ["a", "b"]);
+        // The duplicate keeps its most recent reading.
+        assert!((groups[1].windows[0].remaining - 0.4).abs() < 1e-4);
+        let rings = out[0].by_period();
+        assert!((rings[0].unwrap().remaining - 0.4).abs() < 1e-4);
+        assert!(rings[1].is_none() && rings[2].is_none());
+    }
 
     #[test]
     fn state_limits() {

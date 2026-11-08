@@ -15,7 +15,8 @@ agente de IA: Antigravity, Claude (várias contas), Codex, Cursor & Grok e OpenC
   idioma (PT-BR, EN-US). A escolha fica salva. O botão do GitHub abre este repositório.
 - **O risquinho na barra marca o ritmo:** (passe o mouse para ver o estado) é onde a barra estaria com um consumo uniforme até a
   renovação. Barra à esquerda do risco quer dizer que você está gastando mais rápido que o tempo.
-- O anel no canto de cada cartão mostra a janela mais apertada daquela conta.
+- Os anéis no canto de cada cartão mostram, de fora para dentro, a janela de horas, a semanal e a mensal (a mais apertada de cada uma).
+- Todas as contas do Claude ficam num cartão só, uma seção por conta.
 - Os detalhes ficam escondidos e aparecem ao passar o mouse: data da renovação e previsão
   ("acaba em 2h 10m").
 - Atualiza sozinho a cada 60 s; o Claude, a cada 5 min, e espera mais quando o serviço pede.
