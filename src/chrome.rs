@@ -17,8 +17,15 @@ fn maximized(ui: &Ui) -> bool {
     ui.input(|i| i.viewport().maximized.unwrap_or(false))
 }
 
-/// Paint the title bar at the top of `full` and return the area below it.
-pub fn title_bar(ui: &mut Ui, pal: &Palette, icons: &mut Icons, lang: Lang, full: Rect) -> Rect {
+/// Paint the title bar at the top of `full`; returns the bar and the x where the window
+/// buttons begin (the app's own buttons go left of it).
+pub fn title_bar(
+    ui: &mut Ui,
+    pal: &Palette,
+    icons: &mut Icons,
+    lang: Lang,
+    full: Rect,
+) -> (Rect, f32) {
     let bar = Rect::from_min_size(full.min, vec2(full.width(), BAR_H));
     let p = ui.painter().clone();
     let max = maximized(ui);
@@ -115,7 +122,7 @@ pub fn title_bar(ui: &mut Ui, pal: &Palette, icons: &mut Icons, lang: Lang, full
         }
     }
 
-    Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max)
+    (bar, bar.right() - BTN_W * 3.0)
 }
 
 #[derive(Clone, Copy)]

@@ -7,6 +7,7 @@ use crate::icons;
 use crate::model::{Account, Reading, Status, Window};
 use crate::prefs::ThemeMode;
 use crate::theme::{Palette, SEMIBOLD};
+use crate::update::State as UpdateState;
 use chrono::{DateTime, Local, Utc};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontFamily, FontId, Painter, Pos2, Rect, Response, Sense,
@@ -21,6 +22,7 @@ pub struct Frame<'a> {
     pub now: DateTime<Utc>,
     pub lang: Lang,
     pub theme: ThemeMode,
+    pub update: UpdateState,
 }
 
 /// What the user asked for this frame.
@@ -29,6 +31,7 @@ pub struct Actions {
     pub refresh: bool,
     pub cycle_theme: bool,
     pub toggle_lang: bool,
+    pub check_update: bool,
 }
 
 pub struct Dashboard {
@@ -36,10 +39,13 @@ pub struct Dashboard {
     start: Option<f64>,
     /// Refresh icon angle; it turns only after the user asks for a refresh.
     spin: f32,
-    /// When the user asked for the refresh in progress.
+    /// Start of the refresh icon's current turn.
     spin_from: Option<f64>,
-    /// Full turn where the icon is coming to rest.
-    spin_target: Option<f32>,
+    /// When the last asked-for refresh finished (the check mark shows for a moment).
+    done_at: Option<f64>,
+    menu_open: bool,
+    /// When the menu last opened or closed, for its fade.
+    menu_at: f64,
 }
 
 /// Layout metrics, scaled by density so everything fits without scrolling.
@@ -55,8 +61,8 @@ struct Metrics {
 impl Metrics {
     fn at(k: f32) -> Self {
         Self {
-            pad: 20.0 * k.max(0.8),
-            head: 40.0,
+            pad: 24.0 * k.max(0.8),
+            head: CIRCLE,
             row: 50.0 * k,
             group: 26.0 * k,
             gap: 16.0 * k.max(0.75),
@@ -67,12 +73,26 @@ impl Metrics {
 const BAR_H: f32 = 6.0;
 /// Densest layout: rows stay readable (label line plus bar) down to this scale.
 const MIN_K: f32 = 0.6;
-const BTN_R: f32 = 18.0;
-/// Concentric status rings: radii (outer hours, middle week, inner month) and stroke width.
-const RING_R: [f32; 3] = [17.0, 12.0, 7.0];
-const RING_W: f32 = 3.2;
+/// Every circle (title bar buttons, provider icon discs, status rings) is this wide.
+const CIRCLE: f32 = 28.0;
+const BTN_R: f32 = CIRCLE / 2.0;
+/// Concentric status rings: stroke width and radii (outer hours, middle week, inner month).
+/// The outer edge of the outer ring is exactly `CIRCLE` wide.
+const RING_W: f32 = 2.0;
+const RING_R: [f32; 3] = [
+    BTN_R - RING_W / 2.0,
+    BTN_R - RING_W / 2.0 - 4.5,
+    BTN_R - RING_W / 2.0 - 9.0,
+];
+/// Card corner radius, and the space between a card's header and its rows (times `gap`).
+const CARD_R: u8 = 10;
+const BODY_GAP: f32 = 1.0;
 /// Narrowest card that still reads well, used before falling back to scrolling.
 const MIN_CARD_W: f32 = 220.0;
+/// One eased turn of the refresh icon, and how long the check mark stays after it.
+const TURN: f64 = 0.6;
+const DONE: f64 = 1.1;
+const MENU_FADE: f64 = 0.18;
 
 impl Dashboard {
     pub fn new() -> Self {
@@ -81,52 +101,285 @@ impl Dashboard {
             start: None,
             spin: 0.0,
             spin_from: None,
-            spin_target: None,
+            done_at: None,
+            menu_open: false,
+            menu_at: f64::NEG_INFINITY,
         }
     }
 
-    /// The user asked for a refresh (button or keyboard): spin until it finishes.
+    /// The user asked for a refresh (button or keyboard): one eased turn, more while busy.
     pub fn note_refresh(&mut self, now: f64) {
-        self.spin_from = Some(now);
-        self.spin_target = None;
+        if self.spin_from.is_none() {
+            self.spin_from = Some(now);
+        }
+        self.done_at = None;
     }
 
-    /// Constant speed while refreshing, then a smooth slow-down onto the next full turn.
-    fn advance_spin(&mut self, now: f64, busy: bool, dt: f32) {
-        const SPEED: f32 = TAU * 1.1;
-        // Slow down over the last part of a turn; speed stays continuous.
-        const EASE: f32 = TAU * 0.4;
-        if let Some(t) = self.spin_from {
-            // Keep turning at least briefly, so a fast refresh still reads as one.
-            if busy || now - t < 0.7 {
-                self.spin += SPEED * dt;
+    fn advance_spin(&mut self, now: f64, busy: bool) {
+        let Some(mut t0) = self.spin_from else { return };
+        if now - t0 >= TURN {
+            if busy {
+                // Still working: start another turn.
+                t0 += TURN * ((now - t0) / TURN).floor();
+                self.spin_from = Some(t0);
+            } else {
+                self.spin_from = None;
+                self.spin = 0.0;
+                self.done_at = Some(now);
                 return;
             }
-            self.spin_from = None;
-            self.spin_target = Some(((self.spin + EASE) / TAU).ceil() * TAU);
         }
-        if let Some(target) = self.spin_target {
-            let rem = target - self.spin;
-            let v = if rem > EASE {
-                SPEED
-            } else {
-                (SPEED * rem / EASE).max(0.4)
-            };
-            self.spin += (v * dt).min(rem);
-            if target - self.spin < 1e-3 {
-                self.spin = 0.0;
-                self.spin_target = None;
+        self.spin = TAU * ease_in_out(((now - t0) / TURN) as f32);
+    }
+
+    fn animating(&self, now: f64) -> bool {
+        self.spin_from.is_some()
+            || self.done_at.is_some_and(|t| now - t < DONE)
+            || now - self.menu_at < MENU_FADE
+    }
+
+    /// Refresh and menu buttons in the title bar, ending at `right` (left of the window
+    /// buttons), and the menu itself.
+    pub fn title_buttons(
+        &mut self,
+        ui: &mut Ui,
+        pal: &Palette,
+        f: &Frame<'_>,
+        bar: Rect,
+        right: f32,
+    ) -> Actions {
+        let mut act = Actions::default();
+        let now = ui.input(|i| i.time);
+        let lang = f.lang;
+        let p = ui.painter().clone();
+        let cy = bar.center().y;
+        let menu_c = pos2(right - 10.0 - BTN_R, cy);
+        let refresh_c = menu_c - vec2(CIRCLE + 8.0, 0.0);
+
+        // Refresh: one eased turn, then a brief check mark once the data is in.
+        let (resp, hover) = self.round_button(ui, &p, pal, refresh_c, "refresh", false);
+        if resp.clicked() {
+            self.note_refresh(now);
+            act.refresh = true;
+        }
+        self.advance_spin(now, f.busy);
+        let glyph = lerp_color(pal.muted, pal.text, hover);
+        let since_done = self.done_at.map(|t| (now - t) as f32);
+        let check = since_done.map_or(0.0, |d| {
+            ease_out_cubic(d / 0.15) * (1.0 - ease_in_out((d - 0.8) / 0.3))
+        });
+        if check < 1.0 {
+            refresh_icon(
+                &p,
+                refresh_c,
+                6.5,
+                self.spin,
+                glyph.gamma_multiply(1.0 - check),
+            );
+        }
+        if let Some(d) = since_done
+            && check > 0.0
+        {
+            check_icon(
+                &p,
+                refresh_c,
+                ease_out_cubic(d / 0.25),
+                pal.ok.gamma_multiply(check),
+            );
+        }
+        resp.on_hover_text(lang.t("Recarregar \u{b7} F5", "Reload \u{b7} F5"));
+
+        // Menu button.
+        let (resp, hover) = self.round_button(ui, &p, pal, menu_c, "menu", self.menu_open);
+        let glyph = lerp_color(pal.muted, pal.text, hover);
+        for dy in [-4.0, 0.0, 4.0] {
+            p.line_segment(
+                [menu_c + vec2(-5.5, dy), menu_c + vec2(5.5, dy)],
+                Stroke::new(1.5, glyph),
+            );
+        }
+        let menu_clicked = resp.clicked();
+        resp.on_hover_text(lang.t("Menu", "Menu"));
+        if menu_clicked {
+            self.menu_open = !self.menu_open;
+            self.menu_at = now;
+        }
+
+        // The menu, right-aligned under its button.
+        const ITEM_H: f32 = 34.0;
+        const MENU_W: f32 = 200.0;
+        const MENU_PAD: f32 = 6.0;
+        let menu_rect = Rect::from_min_size(
+            pos2(menu_c.x + BTN_R - MENU_W, bar.bottom() + 4.0),
+            vec2(MENU_W, ITEM_H * 4.0 + MENU_PAD * 2.0),
+        );
+        let fade = ((now - self.menu_at) / MENU_FADE).min(1.0) as f32;
+        let shown = if self.menu_open {
+            ease_out_cubic(fade)
+        } else {
+            1.0 - ease_out_cubic(fade)
+        };
+        if shown > 0.0 {
+            let area = egui::Area::new(ui.scope_id().with("menu"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(menu_rect.min)
+                .interactable(self.menu_open)
+                .show(ui.ctx(), |ui| {
+                    let rect = menu_rect.translate(vec2(0.0, (1.0 - shown) * -4.0));
+                    let _ = ui.allocate_exact_size(menu_rect.size(), Sense::hover());
+                    let p = ui.painter().clone();
+                    let shadow = egui::epaint::Shadow {
+                        offset: [0, 6],
+                        blur: 18,
+                        spread: 0,
+                        color: Color32::from_black_alpha(
+                            ((if pal.dark { 90.0 } else { 26.0 }) * shown) as u8,
+                        ),
+                    };
+                    p.add(shadow.as_shape(rect, CornerRadius::same(10)));
+                    p.rect_filled(rect, CornerRadius::same(10), pal.card.gamma_multiply(shown));
+                    p.rect_stroke(
+                        rect,
+                        CornerRadius::same(10),
+                        Stroke::new(1.0, pal.border.gamma_multiply(shown)),
+                        StrokeKind::Inside,
+                    );
+                    let mut chosen = None;
+                    let items = [Item::Lang, Item::Theme, Item::GitHub, Item::Update];
+                    for (i, item) in items.into_iter().enumerate() {
+                        let r = Rect::from_min_size(
+                            pos2(
+                                rect.left() + MENU_PAD,
+                                rect.top() + MENU_PAD + i as f32 * ITEM_H,
+                            ),
+                            vec2(MENU_W - MENU_PAD * 2.0, ITEM_H),
+                        );
+                        let resp = ui.interact(r, ui.scope_id().with(("item", i)), Sense::click());
+                        let h = ui.ctx().animate_bool_with_time(
+                            ui.scope_id().with(("item-h", i)),
+                            resp.hovered(),
+                            0.15,
+                        );
+                        if h > 0.0 {
+                            p.rect_filled(
+                                r,
+                                CornerRadius::same(7),
+                                pal.track.gamma_multiply(h * shown),
+                            );
+                        }
+                        let ink =
+                            lerp_color(pal.muted, pal.text, 0.55 + 0.45 * h).gamma_multiply(shown);
+                        let ic = pos2(r.left() + 18.0, r.center().y);
+                        match item {
+                            Item::Lang => {
+                                p.text(
+                                    ic + vec2(0.0, 0.5),
+                                    Align2::CENTER_CENTER,
+                                    lang.code(),
+                                    FontId::new(10.5, FontFamily::Name(SEMIBOLD.into())),
+                                    ink,
+                                );
+                            }
+                            Item::Theme => theme_icon(&p, ic, f.theme, ink, pal.card),
+                            Item::GitHub => icons::paint_github(
+                                ui,
+                                Rect::from_center_size(ic, vec2(15.0, 15.0)),
+                                ink,
+                            ),
+                            Item::Update => update_icon(&p, ic, ink),
+                        }
+                        let word = match item {
+                            Item::Lang => lang.t("IDIOMA", "LANGUAGE"),
+                            Item::Theme => lang.t("TEMA", "THEME"),
+                            Item::GitHub => "GITHUB",
+                            Item::Update => lang.t("ATUALIZAR", "UPDATE"),
+                        };
+                        p.text(
+                            pos2(r.left() + 40.0, r.center().y + 0.5),
+                            Align2::LEFT_CENTER,
+                            word,
+                            FontId::new(12.0, FontFamily::Name(SEMIBOLD.into())),
+                            ink,
+                        );
+                        // A quiet note on the right: the current theme, or the update check.
+                        let note = match (item, &f.update) {
+                            (Item::Theme, _) => Some((f.theme.name(lang).to_string(), pal.faint)),
+                            (Item::Update, UpdateState::Checking) => {
+                                Some(("\u{2026}".to_string(), pal.faint))
+                            }
+                            (Item::Update, UpdateState::UpToDate) => {
+                                Some((lang.t("em dia", "up to date").to_string(), pal.ok))
+                            }
+                            (Item::Update, UpdateState::Available(v, _)) => {
+                                Some((format!("v{v}"), pal.warn))
+                            }
+                            (Item::Update, UpdateState::Failed) => {
+                                Some((lang.t("sem conex\u{e3}o", "offline").to_string(), pal.faint))
+                            }
+                            _ => None,
+                        };
+                        if let Some((text, color)) = note {
+                            p.text(
+                                pos2(r.right() - 10.0, r.center().y + 0.5),
+                                Align2::RIGHT_CENTER,
+                                text,
+                                FontId::proportional(11.5),
+                                color.gamma_multiply(shown),
+                            );
+                        }
+                        if resp.clicked() {
+                            chosen = Some(item);
+                        }
+                    }
+                    chosen
+                });
+            match area.inner {
+                Some(Item::Lang) => act.toggle_lang = true,
+                Some(Item::Theme) => act.cycle_theme = true,
+                Some(Item::GitHub) => {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(icons::REPO_URL));
+                    self.close_menu(now);
+                }
+                Some(Item::Update) => match &f.update {
+                    UpdateState::Available(_, url) => {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                        self.close_menu(now);
+                    }
+                    _ => act.check_update = true,
+                },
+                None => {}
             }
+        }
+        // Close on Escape or a click anywhere else.
+        if self.menu_open && !menu_clicked {
+            let outside = ui.input(|i| {
+                i.pointer.any_pressed()
+                    && i.pointer
+                        .press_origin()
+                        .is_some_and(|o| !menu_rect.contains(o) && !resp_rect(menu_c).contains(o))
+            });
+            if outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.close_menu(now);
+            }
+        }
+        if self.animating(now) {
+            ui.ctx().request_repaint();
+        }
+        act
+    }
+
+    fn close_menu(&mut self, now: f64) {
+        if self.menu_open {
+            self.menu_open = false;
+            self.menu_at = now;
         }
     }
 
-    pub fn show(&mut self, ui: &mut Ui, pal: &Palette, f: Frame<'_>) -> Actions {
+    pub fn show(&mut self, ui: &mut Ui, pal: &Palette, f: Frame<'_>) {
         let now = ui.input(|i| i.time);
         let start = *self.start.get_or_insert(now);
         let since = (now - start) as f32;
         self.tweens.active = false;
-        let mut act = Actions::default();
-        let lang = f.lang;
 
         let full = ui.max_rect();
         let merged = crate::model::merge_claude(f.accounts);
@@ -157,7 +410,6 @@ impl Dashboard {
             outer,
             content_w,
             left,
-            top,
             grid_top,
             cols,
             m,
@@ -165,82 +417,6 @@ impl Dashboard {
             total_h,
             ..
         } = Grid::plan(&cards, full);
-
-        // ---------- header ----------
-        // Buttons on the right (GitHub, language, theme, refresh); the name centered, or
-        // left-aligned when the window is too narrow for both.
-        let head_alpha = ease_out_cubic(since / 0.25);
-        let p = ui.painter().clone();
-        let cy = top + BTN_R;
-        let step = BTN_R * 2.0 + 10.0;
-        let refresh_c = pos2(left + content_w - BTN_R, cy);
-        let theme_c = refresh_c - vec2(step, 0.0);
-        let lang_c = theme_c - vec2(step, 0.0);
-        let github_c = lang_c - vec2(step, 0.0);
-
-        let title = p.layout_no_wrap(
-            "AgentUsage".into(),
-            FontId::new(24.0, FontFamily::Name(SEMIBOLD.into())),
-            pal.text.gamma_multiply(head_alpha),
-        );
-        let tw = title.size().x;
-        let center_x = left + content_w / 2.0;
-        // Centered on the window, or on the room left of the buttons when that would overlap.
-        let room = github_c.x - BTN_R - 12.0;
-        let tx = if center_x + tw / 2.0 > room {
-            ((left + room) / 2.0 - tw / 2.0).max(left)
-        } else {
-            center_x - tw / 2.0
-        };
-        p.galley(
-            pos2(tx, cy - title.size().y / 2.0 + (1.0 - head_alpha) * 6.0),
-            title,
-            pal.text,
-        );
-
-        let (resp, hover) = self.round_button(ui, &p, pal, refresh_c, "refresh", head_alpha);
-        let glyph = lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha);
-        if resp.clicked() {
-            self.note_refresh(now);
-        }
-        self.advance_spin(now, f.busy, ui.input(|i| i.stable_dt).min(0.05));
-        refresh_icon(&p, refresh_c, 7.0, self.spin, glyph);
-        act.refresh = resp.clicked();
-        resp.on_hover_text(lang.t("Atualizar · F5", "Refresh · F5"));
-
-        let (resp, hover) = self.round_button(ui, &p, pal, github_c, "github", head_alpha);
-        let glyph = lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha);
-        icons::paint_github(
-            ui,
-            Rect::from_center_size(github_c, vec2(16.0, 16.0)),
-            glyph,
-        );
-        if resp.clicked() {
-            ui.ctx().open_url(egui::OpenUrl::new_tab(icons::REPO_URL));
-        }
-        resp.on_hover_text("GitHub");
-
-        let (resp, hover) = self.round_button(ui, &p, pal, theme_c, "theme", head_alpha);
-        let glyph = lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha);
-        theme_icon(&p, theme_c, f.theme, glyph, pal.card);
-        act.cycle_theme = resp.clicked();
-        resp.on_hover_text(format!(
-            "{}: {}",
-            lang.t("Tema", "Theme"),
-            f.theme.name(lang)
-        ));
-
-        let (resp, hover) = self.round_button(ui, &p, pal, lang_c, "lang", head_alpha);
-        let glyph = lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha);
-        p.text(
-            lang_c + vec2(0.0, 0.5),
-            Align2::CENTER_CENTER,
-            lang.code(),
-            FontId::new(11.5, FontFamily::Name(SEMIBOLD.into())),
-            glyph,
-        );
-        act.toggle_lang = resp.clicked();
-        resp.on_hover_text(lang.t("Idioma", "Language"));
 
         // ---------- grid ----------
         let mut per_provider: HashMap<_, usize> = HashMap::new();
@@ -259,11 +435,10 @@ impl Dashboard {
                 let mut idx = 0;
                 for (r, &(y, h)) in rows.iter().enumerate() {
                     let row_cards = &cards[r * cols..((r + 1) * cols).min(cards.len())];
-                    // Center an incomplete last row.
-                    let shift = (cols - row_cards.len()) as f32 * (card_w + m.gap) / 2.0;
+                    // An incomplete last row stays aligned to the left, on the same columns.
                     for (c, acc) in row_cards.iter().enumerate() {
                         let rect = Rect::from_min_size(
-                            pos2(left + shift + c as f32 * (card_w + m.gap), area.top() + y),
+                            pos2(left + c as f32 * (card_w + m.gap), area.top() + y),
                             vec2(card_w, h),
                         );
                         let show_account =
@@ -274,17 +449,16 @@ impl Dashboard {
                 }
             });
 
-        if self.tweens.active || self.spin_target.is_some() || self.spin_from.is_some() {
+        if self.tweens.active || self.animating(now) {
             ui.ctx().request_repaint();
         } else {
             // Countdowns tick once a second.
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(1000));
         }
-        act
     }
 
-    /// A round header button; returns its response and hover amount.
+    /// A round title bar button; returns its response and hover amount.
     fn round_button(
         &mut self,
         ui: &Ui,
@@ -292,13 +466,16 @@ impl Dashboard {
         pal: &Palette,
         c: Pos2,
         id: &str,
-        alpha: f32,
+        active: bool,
     ) -> (Response, f32) {
-        let rect = Rect::from_center_size(c, vec2(BTN_R * 2.0, BTN_R * 2.0));
-        let resp = ui.interact(rect, ui.scope_id().with(("btn", id)), Sense::click());
+        let resp = ui.interact(
+            resp_rect(c),
+            ui.scope_id().with(("btn", id)),
+            Sense::click(),
+        );
         let hover = ui.ctx().animate_bool_with_time(
             ui.scope_id().with(("btn-h", id)),
-            resp.hovered(),
+            resp.hovered() || active,
             0.15,
         );
         let press = if resp.is_pointer_button_down_on() {
@@ -306,14 +483,13 @@ impl Dashboard {
         } else {
             0.0
         };
-        p.circle_filled(c, BTN_R, pal.card.gamma_multiply(alpha));
+        p.circle_filled(c, BTN_R, lerp_color(pal.card, pal.card_hover, hover));
         p.circle_stroke(
             c,
             BTN_R - 0.5,
             Stroke::new(
                 1.0,
-                lerp_color(pal.border, pal.border_hover, (hover + press).min(1.0))
-                    .gamma_multiply(alpha),
+                lerp_color(pal.border, pal.border_hover, (hover + press).min(1.0)),
             ),
         );
         (resp, hover)
@@ -356,18 +532,18 @@ impl Dashboard {
         if hover > 0.0 && !pal.dark {
             p.rect_filled(
                 rect.translate(vec2(0.0, 2.0)).expand(1.0),
-                CornerRadius::same(15),
+                CornerRadius::same(CARD_R + 1),
                 Color32::from_black_alpha((10.0 * hover * a) as u8),
             );
         }
         p.rect_filled(
             rect,
-            CornerRadius::same(14),
+            CornerRadius::same(CARD_R),
             lerp_color(pal.card, pal.card_hover, hover).gamma_multiply(appear),
         );
         p.rect_stroke(
             rect,
-            CornerRadius::same(14),
+            CornerRadius::same(CARD_R),
             Stroke::new(
                 1.0,
                 lerp_color(pal.border, pal.border_hover, hover).gamma_multiply(appear),
@@ -375,14 +551,16 @@ impl Dashboard {
             StrokeKind::Inside,
         );
 
-        // Header: icon, title, optional account, status ring.
+        // Header: icon on a disc, title, optional account, status rings. The disc and the
+        // rings are the same size as the title bar buttons.
         let inner = rect.shrink(m.pad);
         let hy = inner.top() + m.head / 2.0;
-        let icon = Rect::from_min_size(pos2(inner.left(), hy - 11.0), vec2(22.0, 22.0));
+        let disc = pos2(inner.left() + BTN_R, hy);
+        p.circle_filled(disc, BTN_R, pal.track.gamma_multiply(a));
         icons::paint_provider(
             ui,
             acc.provider,
-            icon.shrink(1.0),
+            Rect::from_center_size(disc, Vec2::splat(15.0)),
             pal.text,
             if unavailable { a * 0.5 } else { a },
         );
@@ -394,13 +572,13 @@ impl Dashboard {
         );
         let title_w = title.size().x;
         p.galley(
-            pos2(inner.left() + 32.0, hy - title.size().y / 2.0),
+            pos2(inner.left() + CIRCLE + 10.0, hy - title.size().y / 2.0),
             title,
             pal.text,
         );
         if show_account && let Some(name) = &acc.account {
             p.text(
-                pos2(inner.left() + 32.0 + title_w + 7.0, hy + 0.5),
+                pos2(inner.left() + CIRCLE + 10.0 + title_w + 7.0, hy + 0.5),
                 Align2::LEFT_CENTER,
                 format!("·  {name}"),
                 FontId::proportional(13.0),
@@ -408,7 +586,7 @@ impl Dashboard {
             );
         }
 
-        let body_top = inner.top() + m.head + m.gap * 0.6;
+        let body_top = inner.top() + m.head + m.gap * BODY_GAP;
         match &acc.reading {
             Reading::Loading => {
                 // Shimmering placeholders.
@@ -456,7 +634,7 @@ impl Dashboard {
             Reading::Ok(groups) => {
                 // Concentric rings, outer to inner: hours, week, month (the tightest window
                 // of each). Same place and size on every card; a ring shows only if it applies.
-                let rc = pos2(inner.right() - RING_R[0] - RING_W / 2.0, hy);
+                let rc = pos2(inner.right() - BTN_R, hy);
                 let mut tip = Vec::new();
                 for (i, w) in acc.by_period().into_iter().enumerate() {
                     let Some(w) = w else { continue };
@@ -485,7 +663,7 @@ impl Dashboard {
                     tip.push(format!("{} · {}%", lang.data(&w.label), pct(w.remaining)));
                 }
                 if !tip.is_empty() {
-                    let ring_rect = Rect::from_center_size(rc, Vec2::splat(RING_R[0] * 2.0 + 6.0));
+                    let ring_rect = Rect::from_center_size(rc, Vec2::splat(CIRCLE + 4.0));
                     ui.interact(
                         ring_rect,
                         ui.scope_id().with(("ring", &acc.key)),
@@ -639,6 +817,18 @@ impl Dashboard {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Item {
+    Lang,
+    Theme,
+    GitHub,
+    Update,
+}
+
+fn resp_rect(c: Pos2) -> Rect {
+    Rect::from_center_size(c, Vec2::splat(CIRCLE))
+}
+
 struct RowCtx<'a> {
     pal: &'a Palette,
     lang: Lang,
@@ -656,7 +846,6 @@ struct Grid {
     outer: f32,
     content_w: f32,
     left: f32,
-    top: f32,
     grid_top: f32,
     avail_h: f32,
     cols: usize,
@@ -670,11 +859,11 @@ impl Grid {
         let outer = (full.width() * 0.045).clamp(16.0, 56.0);
         let content_w = (full.width() - outer * 2.0).min(1280.0);
         let left = full.center().x - content_w / 2.0;
-        let top = full.top() + outer * 0.45;
+        // The same margin above and below the grid.
         let compact = full.height() < 640.0;
-        let head_gap = if compact { 14.0 } else { 44.0 };
-        let grid_top = top + BTN_R * 2.0 + head_gap;
-        let avail_h = full.bottom() - grid_top - outer * if compact { 0.3 } else { 0.6 };
+        let margin = outer * if compact { 0.35 } else { 0.6 };
+        let grid_top = full.top() + margin;
+        let avail_h = full.bottom() - grid_top - margin;
 
         let max_cols = if content_w >= 980.0 {
             3
@@ -715,7 +904,6 @@ impl Grid {
             outer,
             content_w,
             left,
-            top,
             grid_top,
             avail_h,
             cols,
@@ -738,10 +926,12 @@ fn grid_rows(cards: &[&Account], cols: usize, m: &Metrics) -> (Vec<(f32, f32)>, 
     (out, total)
 }
 
+/// Height of a card whose content ends exactly `pad` above its bottom edge, like the top.
 fn card_height(a: &Account, m: &Metrics) -> f32 {
     let body = match &a.reading {
-        Reading::Loading => 2.0 * m.row,
-        Reading::Unavailable(_) => 44.0,
+        // The last placeholder bar ends 30 px into its row.
+        Reading::Loading => m.row + 30.0,
+        Reading::Unavailable(_) => 40.0,
         Reading::Ok(groups) => {
             let rows: usize = groups.iter().map(|g| g.windows.len()).sum();
             let heads = if groups.len() > 1 {
@@ -749,10 +939,11 @@ fn card_height(a: &Account, m: &Metrics) -> f32 {
             } else {
                 0.0
             };
-            rows as f32 * m.row + heads
+            // The last row's bar ends 28 px into it.
+            rows.saturating_sub(1) as f32 * m.row + if rows > 0 { 28.0 } else { 0.0 } + heads
         }
     };
-    m.pad * 2.0 + m.head + m.gap * 0.6 + body - 10.0
+    m.pad * 2.0 + m.head + m.gap * BODY_GAP + body
 }
 
 fn status_name(st: Status, lang: Lang) -> &'static str {
@@ -942,4 +1133,30 @@ fn theme_icon(p: &Painter, c: Pos2, mode: ThemeMode, color: Color32, bg: Color32
             );
         }
     }
+}
+
+/// A check mark drawn from its short stroke to its long one as `t` goes 0 to 1.
+fn check_icon(p: &Painter, c: Pos2, t: f32, color: Color32) {
+    let a = c + vec2(-5.0, 0.2);
+    let b = c + vec2(-1.6, 3.6);
+    let e = c + vec2(5.2, -3.6);
+    let (l1, l2) = (a.distance(b), b.distance(e));
+    let d = t.clamp(0.0, 1.0) * (l1 + l2);
+    let mut pts = vec![a];
+    if d <= l1 {
+        pts.push(a + (b - a) * (d / l1).max(0.01));
+    } else {
+        pts.push(b);
+        pts.push(b + (e - b) * ((d - l1) / l2));
+    }
+    p.add(Shape::line(pts, PathStroke::new(1.8, color)));
+}
+
+/// An arrow coming down onto a tray: download the new version.
+fn update_icon(p: &Painter, c: Pos2, color: Color32) {
+    let s = Stroke::new(1.5, color);
+    p.line_segment([c + vec2(0.0, -6.0), c + vec2(0.0, 2.5)], s);
+    p.line_segment([c + vec2(-3.5, -1.0), c + vec2(0.0, 2.5)], s);
+    p.line_segment([c + vec2(3.5, -1.0), c + vec2(0.0, 2.5)], s);
+    p.line_segment([c + vec2(-6.0, 6.0), c + vec2(6.0, 6.0)], s);
 }

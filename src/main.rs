@@ -13,9 +13,10 @@ mod prefs;
 mod providers;
 mod theme;
 mod ui;
+mod update;
 
 use chrono::Utc;
-use eframe::egui;
+use eframe::egui::{self, Rect, pos2};
 use prefs::{Prefs, ThemeMode};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -73,6 +74,7 @@ struct App {
     shot_taken: Arc<Mutex<bool>>,
     demo_since: f64,
     first_frame: Option<f64>,
+    updates: update::Checker,
 }
 
 impl App {
@@ -106,6 +108,7 @@ impl App {
             shot_taken: Arc::new(Mutex::new(false)),
             demo_since: 0.0,
             first_frame: None,
+            updates: update::Checker::new(),
         }
     }
 }
@@ -138,8 +141,10 @@ impl eframe::App for App {
         let time = ctx.input(|i| i.time);
 
         let full = ui.max_rect();
-        ui.painter().rect_filled(full, 0.0, pal.bg);
-        let body = chrome::title_bar(ui, &pal, &mut self.icons, self.prefs.lang, full);
+        theme::paint_background(ui.painter(), full, &pal);
+        let (bar, buttons_right) =
+            chrome::title_bar(ui, &pal, &mut self.icons, self.prefs.lang, full);
+        let body = Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
         let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body));
 
         let (accounts, busy) = match &self.data {
@@ -155,9 +160,15 @@ impl eframe::App for App {
             now,
             lang: self.prefs.lang,
             theme: self.prefs.theme,
+            update: self.updates.state(),
         };
-        let act = self.dash.show(&mut body_ui, &pal, f);
+        let act = self.dash.title_buttons(ui, &pal, &f, bar, buttons_right);
+        self.dash.show(&mut body_ui, &pal, f);
         chrome::frame_edges(ui, &pal, full);
+        if act.check_update {
+            let c = ctx.clone();
+            self.updates.check(move |_| c.request_repaint());
+        }
 
         if act.refresh || key_refresh {
             if key_refresh {

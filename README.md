@@ -11,8 +11,8 @@ agente de IA: Antigravity, Claude (várias contas), Codex, Cursor & Grok e OpenC
   com o tempo até renovar ao lado.
 - **A cor indica o estado:** verde está no ritmo; âmbar pede atenção (pouca cota ou consumo acima do
   ritmo); vinho fica crítica, abaixo de 10%; cinza está esgotada até renovar.
-- **Tema e idioma:** os botões ao lado de Atualizar alternam o tema (sistema, claro, escuro) e o
-  idioma (PT-BR, EN-US). A escolha fica salva. O botão do GitHub abre este repositório.
+- **Menu na barra de título:** idioma (PT-BR, EN-US), tema (sistema, claro, escuro), GitHub e
+  Atualizar, que procura uma versão nova nas releases do repositório. As escolhas ficam salvas.
 - **O risquinho na barra marca o ritmo:** (passe o mouse para ver o estado) é onde a barra estaria com um consumo uniforme até a
   renovação. Barra à esquerda do risco quer dizer que você está gastando mais rápido que o tempo.
 - Os anéis no canto de cada cartão mostram, de fora para dentro, a janela de horas, a semanal e a mensal (a mais apertada de cada uma).
@@ -20,7 +20,8 @@ agente de IA: Antigravity, Claude (várias contas), Codex, Cursor & Grok e OpenC
 - Os detalhes ficam escondidos e aparecem ao passar o mouse: data da renovação e previsão
   ("acaba em 2h 10m").
 - Atualiza sozinho a cada 60 s; o Claude, a cada 5 min, e espera mais quando o serviço pede.
-  **F5** ou o botão no canto pedem uma leitura nova dentro desses limites.
+  **F5** ou o botão de recarregar na barra de título pedem uma leitura nova dentro desses limites;
+  um sinal de visto confirma quando ela termina.
 
 ![AgentUsage, tema escuro](docs/demo-dark.png)
 

@@ -17,7 +17,9 @@ const CLOSE: Color32 = Color32::from_rgb(0xC4, 0x2B, 0x1C);
 
 #[derive(Clone, Copy)]
 pub struct Palette {
+    /// Window background, a soft vertical gradient from `bg` to `bg_low`.
     pub bg: Color32,
+    pub bg_low: Color32,
     pub card: Color32,
     pub card_hover: Color32,
     pub border: Color32,
@@ -38,15 +40,17 @@ pub struct Palette {
 impl Palette {
     pub fn light() -> Self {
         Self {
-            bg: Color32::from_rgb(0xF5, 0xF5, 0xF3),
+            // Cool pearl gray, slightly lighter at the top.
+            bg: Color32::from_rgb(0xF1, 0xF3, 0xF6),
+            bg_low: Color32::from_rgb(0xE6, 0xE9, 0xEE),
             card: Color32::from_rgb(0xFF, 0xFF, 0xFF),
             card_hover: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-            border: Color32::from_rgb(0xE7, 0xE7, 0xE3),
-            border_hover: Color32::from_rgb(0xD2, 0xD2, 0xCC),
-            text: Color32::from_rgb(0x17, 0x17, 0x1A),
-            muted: Color32::from_rgb(0x82, 0x82, 0x7E),
-            faint: Color32::from_rgb(0xB4, 0xB4, 0xAF),
-            track: Color32::from_rgb(0xEE, 0xEE, 0xEA),
+            border: Color32::from_rgb(0xE1, 0xE4, 0xE9),
+            border_hover: Color32::from_rgb(0xCB, 0xD0, 0xD7),
+            text: Color32::from_rgb(0x16, 0x18, 0x1C),
+            muted: Color32::from_rgb(0x7D, 0x83, 0x8C),
+            faint: Color32::from_rgb(0xAF, 0xB5, 0xBD),
+            track: Color32::from_rgb(0xEC, 0xEE, 0xF2),
             ok: OK,
             warn: WARN,
             crit: CRIT,
@@ -59,7 +63,8 @@ impl Palette {
 
     pub fn dark() -> Self {
         Self {
-            bg: Color32::from_rgb(0x0F, 0x0F, 0x11),
+            bg: Color32::from_rgb(0x11, 0x12, 0x15),
+            bg_low: Color32::from_rgb(0x0B, 0x0C, 0x0E),
             card: Color32::from_rgb(0x17, 0x17, 0x1A),
             card_hover: Color32::from_rgb(0x1B, 0x1B, 0x1F),
             border: Color32::from_rgb(0x24, 0x24, 0x29),
@@ -86,6 +91,19 @@ impl Palette {
             Status::Empty => self.empty,
         }
     }
+}
+
+/// The window background: a quiet top-to-bottom gradient.
+pub fn paint_background(p: &egui::Painter, rect: egui::Rect, pal: &Palette) {
+    let mut mesh = egui::Mesh::default();
+    let i = mesh.vertices.len() as u32;
+    mesh.colored_vertex(rect.left_top(), pal.bg);
+    mesh.colored_vertex(rect.right_top(), pal.bg);
+    mesh.colored_vertex(rect.right_bottom(), pal.bg_low);
+    mesh.colored_vertex(rect.left_bottom(), pal.bg_low);
+    mesh.add_triangle(i, i + 1, i + 2);
+    mesh.add_triangle(i, i + 2, i + 3);
+    p.add(mesh);
 }
 
 pub const SEMIBOLD: &str = "semibold";
