@@ -71,7 +71,7 @@ pub fn accounts() -> Vec<Account> {
             one(vec![
                 w("5 horas", 1.0, 296, 300),
                 w("Semanal", 0.53, 26 * 60, 10_080),
-                w("Mensal", 0.12, 7 * 1440 + 360, 43_200),
+                w("Mensal", 0.07, 7 * 1440 + 360, 43_200),
             ]),
         ),
         acc(

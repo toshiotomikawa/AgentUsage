@@ -1,4 +1,4 @@
-# Builds Agent Usage in release mode, installs it to %LOCALAPPDATA%\Programs\AgentUsage and creates
+# Builds AgentUsage in release mode, installs it to %LOCALAPPDATA%\Programs\AgentUsage and creates
 # "AgentUsage" shortcuts on the Desktop and in the Start menu. Safe to run again after updates.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent

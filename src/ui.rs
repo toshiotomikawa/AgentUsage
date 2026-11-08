@@ -6,7 +6,7 @@ use crate::i18n::Lang;
 use crate::icons;
 use crate::model::{Account, Reading, Status, Window};
 use crate::prefs::ThemeMode;
-use crate::theme::{Palette, SEMIBOLD};
+use crate::theme::{MONO, MONO_SEMIBOLD, Palette, SEMIBOLD};
 use chrono::{DateTime, Local, Utc};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontFamily, FontId, Painter, Pos2, Rect, Response, Sense,
@@ -36,7 +36,12 @@ pub struct Actions {
 pub struct Dashboard {
     tweens: Tweens,
     start: Option<f64>,
+    /// Refresh icon angle; it turns only after the user asks for a refresh.
     spin: f32,
+    /// When the user asked for the refresh in progress.
+    spin_from: Option<f64>,
+    /// Full turn where the icon is coming to rest.
+    spin_target: Option<f32>,
 }
 
 /// Layout metrics, scaled by density so everything fits without scrolling.
@@ -63,6 +68,8 @@ impl Metrics {
 
 const BAR_H: f32 = 6.0;
 const BTN_R: f32 = 18.0;
+/// Narrowest card that still reads well, used before falling back to scrolling.
+const MIN_CARD_W: f32 = 220.0;
 
 impl Dashboard {
     pub fn new() -> Self {
@@ -70,6 +77,43 @@ impl Dashboard {
             tweens: Tweens::default(),
             start: None,
             spin: 0.0,
+            spin_from: None,
+            spin_target: None,
+        }
+    }
+
+    /// The user asked for a refresh (button or keyboard): spin until it finishes.
+    pub fn note_refresh(&mut self, now: f64) {
+        self.spin_from = Some(now);
+        self.spin_target = None;
+    }
+
+    /// Constant speed while refreshing, then a smooth slow-down onto the next full turn.
+    fn advance_spin(&mut self, now: f64, busy: bool, dt: f32) {
+        const SPEED: f32 = TAU * 1.1;
+        // Slow down over the last part of a turn; speed stays continuous.
+        const EASE: f32 = TAU * 0.4;
+        if let Some(t) = self.spin_from {
+            // Keep turning at least briefly, so a fast refresh still reads as one.
+            if busy || now - t < 0.7 {
+                self.spin += SPEED * dt;
+                return;
+            }
+            self.spin_from = None;
+            self.spin_target = Some(((self.spin + EASE) / TAU).ceil() * TAU);
+        }
+        if let Some(target) = self.spin_target {
+            let rem = target - self.spin;
+            let v = if rem > EASE {
+                SPEED
+            } else {
+                (SPEED * rem / EASE).max(0.4)
+            };
+            self.spin += (v * dt).min(rem);
+            if target - self.spin < 1e-3 {
+                self.spin = 0.0;
+                self.spin_target = None;
+            }
         }
     }
 
@@ -88,51 +132,41 @@ impl Dashboard {
         let top = full.top() + outer * 0.45;
 
         // ---------- header ----------
+        // Buttons on the right (GitHub, language, theme, refresh); the name centered, or
+        // left-aligned when the window is too narrow for both.
         let head_alpha = ease_out_cubic(since / 0.5);
         let p = ui.painter().clone();
-        p.text(
-            pos2(left, top + (1.0 - head_alpha) * 6.0),
-            Align2::LEFT_TOP,
-            lang.t("Cotas", "Quotas"),
-            FontId::new(24.0, FontFamily::Name(SEMIBOLD.into())),
-            pal.text.gamma_multiply(head_alpha),
-        );
-        let (summary, summary_color) = summary(f.accounts, f.now, pal, lang);
-        let dot_c = pos2(left + 4.0, top + 46.0);
-        p.circle_filled(dot_c, 3.5, summary_color.gamma_multiply(head_alpha));
-        p.text(
-            pos2(left + 14.0, top + 46.0),
-            Align2::LEFT_CENTER,
-            summary,
-            FontId::proportional(13.5),
-            pal.muted.gamma_multiply(head_alpha),
-        );
-
-        // Header buttons, right to left: refresh, theme, language.
-        let cy = top + 20.0;
+        let cy = top + BTN_R;
         let step = BTN_R * 2.0 + 10.0;
         let refresh_c = pos2(left + content_w - BTN_R, cy);
         let theme_c = refresh_c - vec2(step, 0.0);
         let lang_c = theme_c - vec2(step, 0.0);
+        let github_c = lang_c - vec2(step, 0.0);
+
+        let title = p.layout_no_wrap(
+            "AgentUsage".into(),
+            FontId::new(24.0, FontFamily::Name(SEMIBOLD.into())),
+            pal.text.gamma_multiply(head_alpha),
+        );
+        let tw = title.size().x;
+        let center_x = left + content_w / 2.0;
+        let tx = if center_x + tw / 2.0 > github_c.x - BTN_R - 12.0 {
+            left
+        } else {
+            center_x - tw / 2.0
+        };
+        p.galley(
+            pos2(tx, cy - title.size().y / 2.0 + (1.0 - head_alpha) * 6.0),
+            title,
+            pal.text,
+        );
 
         let (resp, hover) = self.round_button(ui, &p, pal, refresh_c, "refresh", head_alpha);
         let glyph = lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha);
-        let dt = ui.input(|i| i.stable_dt).min(0.05);
-        if f.busy {
-            self.spin += dt * TAU * 1.1;
-            self.tweens.active = true;
-        } else {
-            // Settle to the nearest full turn.
-            let target = (self.spin / TAU).ceil() * TAU;
-            if (target - self.spin).abs() > 0.01 {
-                self.spin += ((target - self.spin) * 10.0 * dt)
-                    .max(0.02)
-                    .min(target - self.spin);
-                self.tweens.active = true;
-            } else {
-                self.spin = 0.0;
-            }
+        if resp.clicked() {
+            self.note_refresh(now);
         }
+        self.advance_spin(now, f.busy, ui.input(|i| i.stable_dt).min(0.05));
         refresh_icon(&p, refresh_c, 7.0, self.spin, glyph);
         act.refresh = resp.clicked();
         resp.on_hover_ui(|ui| {
@@ -154,6 +188,21 @@ impl Dashboard {
                 });
             }
             ui.label(egui::RichText::new("F5").weak());
+        });
+
+        let (resp, hover) = self.round_button(ui, &p, pal, github_c, "github", head_alpha);
+        let glyph = lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha);
+        icons::paint_github(
+            ui,
+            Rect::from_center_size(github_c, vec2(16.0, 16.0)),
+            glyph,
+        );
+        if resp.clicked() {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(icons::REPO_URL));
+        }
+        resp.on_hover_ui(|ui| {
+            ui.label(egui::RichText::new(lang.t("Código no GitHub", "Source on GitHub")).strong());
+            ui.label(egui::RichText::new("github.com/toshiotomikawa/AgentUsage").weak());
         });
 
         let (resp, hover) = self.round_button(ui, &p, pal, theme_c, "theme", head_alpha);
@@ -195,7 +244,7 @@ impl Dashboard {
         });
 
         // ---------- grid ----------
-        let grid_top = top + 78.0;
+        let grid_top = top + BTN_R * 2.0 + 24.0;
         let avail_h = full.bottom() - grid_top - outer * 0.6;
 
         let mut cards: Vec<&Account> = f.accounts.iter().collect();
@@ -217,21 +266,34 @@ impl Dashboard {
         } else {
             1
         };
-        let cols = max_cols.min(cards.len().max(1));
-
-        // Pick the largest density that fits.
-        let mut k = 1.0;
-        let mut m = Metrics::at(k);
-        let mut rows;
-        let mut total_h;
-        loop {
-            (rows, total_h) = grid_rows(&cards, cols, &m);
-            if total_h <= avail_h || k <= 0.8 {
+        // Pick the largest density that fits; when even the smallest does not, add a column
+        // (as long as cards stay readable) rather than scroll.
+        let fit = |cols: usize| {
+            let mut k = 1.0;
+            loop {
+                let m = Metrics::at(k);
+                let (rows, total_h) = grid_rows(&cards, cols, &m);
+                if total_h <= avail_h || k <= 0.8 {
+                    return (cols, m, rows, total_h);
+                }
+                k -= 0.05;
+            }
+        };
+        let n = cards.len().max(1);
+        let mut best = fit(max_cols.min(n));
+        let mut cols = best.0;
+        while best.3 > avail_h && cols < 3.min(n) {
+            cols += 1;
+            let gap = Metrics::at(0.8).gap;
+            if (content_w - gap * (cols - 1) as f32) / (cols as f32) < MIN_CARD_W {
                 break;
             }
-            k -= 0.05;
-            m = Metrics::at(k);
+            let next = fit(cols);
+            if next.3 < best.3 {
+                best = next;
+            }
         }
+        let (cols, m, rows, total_h) = best;
         let card_w = (content_w - m.gap * (cols - 1) as f32) / cols as f32;
 
         let grid_rect = Rect::from_min_max(pos2(full.left(), grid_top), full.max);
@@ -259,7 +321,7 @@ impl Dashboard {
                 }
             });
 
-        if self.tweens.active || f.busy {
+        if self.tweens.active || self.spin_target.is_some() || self.spin_from.is_some() {
             ui.ctx().request_repaint();
         } else {
             // Countdowns tick once a second.
@@ -385,9 +447,9 @@ impl Dashboard {
         );
         if show_account && let Some(name) = &acc.account {
             p.text(
-                pos2(inner.left() + 32.0 + title_w + 8.0, hy + 0.5),
+                pos2(inner.left() + 32.0 + title_w + 7.0, hy + 0.5),
                 Align2::LEFT_CENTER,
-                name,
+                format!("·  {name}"),
                 FontId::proportional(13.0),
                 pal.muted.gamma_multiply(a),
             );
@@ -536,7 +598,7 @@ impl Dashboard {
         let pct_color = if st == Status::Ok { pal.text } else { color };
         let pct_g = p.layout_no_wrap(
             format!("{}%", pct(v)),
-            FontId::new(14.0, FontFamily::Name(SEMIBOLD.into())),
+            FontId::new(13.5, FontFamily::Name(MONO_SEMIBOLD.into())),
             pct_color.gamma_multiply(a),
         );
         let pct_w = pct_g.size().x;
@@ -551,7 +613,7 @@ impl Dashboard {
                 pos2(row.right() - pct_w - 10.0, line_y + 0.5),
                 Align2::RIGHT_CENTER,
                 countdown(left, lang),
-                FontId::proportional(12.0),
+                FontId::new(11.5, FontFamily::Name(MONO.into())),
                 pal.muted.gamma_multiply(a * 0.8),
             );
         }
@@ -580,11 +642,36 @@ impl Dashboard {
                 self.tweens.active = true;
             }
             let x = bar.left() + bar.width() * tv;
-            let h = 6.0 + 2.0 * hover;
+            let tick = Rect::from_center_size(pos2(x, bar.center().y), vec2(12.0, 20.0));
+            let tick_resp = ui.interact(tick, ui.scope_id().with((id, "pace")), Sense::hover());
+            let tick_h = ui.ctx().animate_bool_with_time(
+                ui.scope_id().with((id, "pace-h")),
+                tick_resp.hovered(),
+                0.15,
+            );
+            let h = 6.0 + 2.0 * hover.max(tick_h);
             p.line_segment(
                 [pos2(x, bar.center().y - h), pos2(x, bar.center().y + h)],
-                Stroke::new(1.6, pal.pace.gamma_multiply(0.55 * a * appear)),
+                Stroke::new(
+                    1.6 + 0.6 * tick_h,
+                    pal.pace.gamma_multiply((0.55 + 0.35 * tick_h) * a * appear),
+                ),
             );
+            tick_resp.on_hover_ui(|ui| {
+                ui.set_max_width(280.0);
+                ui.horizontal(|ui| {
+                    let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+                    ui.painter().circle_filled(dot.center(), 4.0, color);
+                    ui.label(egui::RichText::new(status_name(st, lang)).strong());
+                });
+                ui.label(
+                    egui::RichText::new(lang.t(
+                        "O risco marca onde a barra estaria com um consumo uniforme até a renovação.",
+                        "The tick marks where the bar would be with even use until the reset.",
+                    ))
+                    .weak(),
+                );
+            });
         }
 
         resp.on_hover_ui(|ui| {
@@ -652,48 +739,13 @@ fn card_height(a: &Account, m: &Metrics) -> f32 {
     m.pad * 2.0 + m.head + m.gap * 0.6 + body - 10.0
 }
 
-fn summary(
-    accounts: &[Account],
-    now: DateTime<Utc>,
-    pal: &Palette,
-    lang: Lang,
-) -> (String, Color32) {
-    let mut warn = 0;
-    let mut empty = 0;
-    let mut ok = 0;
-    for a in accounts {
-        for w in a.windows() {
-            match w.status(now) {
-                Status::Ok => ok += 1,
-                Status::Warning | Status::Critical => warn += 1,
-                Status::Empty => empty += 1,
-            }
-        }
+fn status_name(st: Status, lang: Lang) -> &'static str {
+    match st {
+        Status::Ok => lang.t("No ritmo", "On pace"),
+        Status::Warning => lang.t("Atenção", "Attention"),
+        Status::Critical => lang.t("Crítica: abaixo de 10%", "Critical: below 10%"),
+        Status::Empty => lang.t("Esgotada até renovar", "Depleted until it resets"),
     }
-    if ok + warn + empty == 0 {
-        return (
-            lang.t("Lendo as cotas…", "Reading quotas…").into(),
-            pal.faint,
-        );
-    }
-    let attention = |n: usize| match lang {
-        Lang::Pt => format!("{n} {} atenção", plural(n, "pede", "pedem")),
-        Lang::En => format!("{n} {} attention", plural(n, "needs", "need")),
-    };
-    let depleted = |n: usize| match lang {
-        Lang::Pt => format!("{n} {}", plural(n, "esgotada", "esgotadas")),
-        Lang::En => format!("{n} depleted"),
-    };
-    match (empty, warn) {
-        (0, 0) => (lang.t("Tudo dentro do ritmo", "All on pace").into(), pal.ok),
-        (0, w) => (attention(w), pal.warn),
-        (e, 0) => (depleted(e), pal.empty),
-        (e, w) => (format!("{} · {}", depleted(e), attention(w)), pal.warn),
-    }
-}
-
-fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
-    if n == 1 { one } else { many }
 }
 
 fn pct(v: f32) -> i32 {

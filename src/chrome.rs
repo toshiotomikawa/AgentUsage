@@ -2,7 +2,7 @@
 //! resize edges and a hairline border. The native frame is turned off in `main`.
 
 use crate::i18n::Lang;
-use crate::icons::{self, Icons};
+use crate::icons::Icons;
 use crate::theme::{Palette, SEMIBOLD};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, CursorIcon, FontFamily, FontId, Pos2, Rect, Sense, Stroke,
@@ -18,7 +18,7 @@ fn maximized(ui: &Ui) -> bool {
 }
 
 /// Paint the title bar at the top of `full` and return the area below it.
-pub fn title_bar(ui: &mut Ui, pal: &Palette, icons: &Icons, lang: Lang, full: Rect) -> Rect {
+pub fn title_bar(ui: &mut Ui, pal: &Palette, icons: &mut Icons, lang: Lang, full: Rect) -> Rect {
     let bar = Rect::from_min_size(full.min, vec2(full.width(), BAR_H));
     let p = ui.painter().clone();
     let max = maximized(ui);
@@ -38,14 +38,12 @@ pub fn title_bar(ui: &mut Ui, pal: &Palette, icons: &Icons, lang: Lang, full: Re
 
     let focused = ui.input(|i| i.viewport().focused.unwrap_or(true));
     let ink = if focused { pal.text } else { pal.muted };
-    let icon = Rect::from_center_size(pos2(bar.left() + 22.0, bar.center().y), vec2(18.0, 18.0));
-    icons::paint(ui, &icons.app, icon, 9.0, if focused { 1.0 } else { 0.7 });
-    // The disc is white; a hairline keeps its edge visible on a light bar.
-    p.circle_stroke(icon.center(), 9.0, Stroke::new(1.0, pal.border_hover));
+    let icon = Rect::from_center_size(pos2(bar.left() + 20.0, bar.center().y), vec2(16.0, 16.0));
+    icons.paint_logo(ui, icon, ink);
     p.text(
-        pos2(icon.right() + 9.0, bar.center().y),
+        pos2(icon.right() + 8.0, bar.center().y),
         Align2::LEFT_CENTER,
-        "Agent Usage",
+        "AgentUsage",
         FontId::new(12.5, FontFamily::Name(SEMIBOLD.into())),
         ink.gamma_multiply(0.85),
     );

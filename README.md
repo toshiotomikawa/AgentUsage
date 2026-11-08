@@ -1,26 +1,26 @@
-# Agent Usage
+# AgentUsage
 
 Painel de desktop, escrito em Rust, que mostra em tempo real quanto ainda resta da cota de cada
 agente de IA: Antigravity, Claude (várias contas), Codex, Cursor & Grok e OpenCode Go.
 
-![Agent Usage, tema claro](docs/demo-light.png)
+![AgentUsage, tema claro](docs/demo-light.png)
 
 ## Como ler
 
 - **Uma linha por janela de cota** (5 horas, semanal, mensal…), sempre em **% restante**,
   com o tempo até renovar ao lado.
 - **A cor indica o estado:** verde está no ritmo; âmbar pede atenção (pouca cota ou consumo acima do
-  ritmo); cinza está esgotada até renovar.
+  ritmo); vinho fica crítica, abaixo de 10%; cinza está esgotada até renovar.
 - **Tema e idioma:** os botões ao lado de Atualizar alternam o tema (sistema, claro, escuro) e o
-  idioma (PT-BR, EN-US). A escolha fica salva.
-- **O risquinho na barra marca o ritmo:** é onde a barra estaria com um consumo uniforme até a
+  idioma (PT-BR, EN-US). A escolha fica salva. O botão do GitHub abre este repositório.
+- **O risquinho na barra marca o ritmo:** (passe o mouse para ver o estado) é onde a barra estaria com um consumo uniforme até a
   renovação. Barra à esquerda do risco quer dizer que você está gastando mais rápido que o tempo.
 - O anel no canto de cada cartão mostra a janela mais apertada daquela conta.
 - Os detalhes ficam escondidos e aparecem ao passar o mouse: data exata da renovação e previsão
   ("neste ritmo, acaba em 2h 10m").
 - Atualiza sozinho a cada 60 s. **F5** ou o botão no canto atualizam na hora.
 
-![Agent Usage, tema escuro](docs/demo-dark.png)
+![AgentUsage, tema escuro](docs/demo-dark.png)
 
 ## De onde vêm os dados
 

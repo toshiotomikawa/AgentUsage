@@ -4,6 +4,7 @@ mod anim;
 mod chrome;
 mod config;
 mod demo;
+mod hidden;
 mod i18n;
 mod icons;
 mod model;
@@ -140,7 +141,7 @@ impl eframe::App for App {
 
         let full = ui.max_rect();
         ui.painter().rect_filled(full, 0.0, pal.bg);
-        let body = chrome::title_bar(ui, &pal, &self.icons, self.prefs.lang, full);
+        let body = chrome::title_bar(ui, &pal, &mut self.icons, self.prefs.lang, full);
         let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body));
 
         let (accounts, busy, last) = match &self.data {
@@ -167,6 +168,9 @@ impl eframe::App for App {
         chrome::frame_edges(ui, &pal, full);
 
         if act.refresh || key_refresh {
+            if key_refresh {
+                self.dash.note_refresh(time);
+            }
             match &self.data {
                 Data::Demo(_) => self.demo_since = time,
                 Data::Live(p) => p.refresh(),
@@ -225,7 +229,7 @@ fn main() -> eframe::Result {
     let args = parse_args();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Agent Usage")
+            .with_title("AgentUsage")
             .with_app_id("agent-usage")
             .with_inner_size(args.size)
             .with_min_inner_size([400.0, 460.0])
@@ -234,7 +238,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "Agent Usage",
+        "AgentUsage",
         options,
         Box::new(|cc| Ok(Box::new(App::new(cc, args)))),
     )

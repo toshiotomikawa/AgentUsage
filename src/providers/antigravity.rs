@@ -12,10 +12,8 @@
 use super::{Fetched, Source, parse_time};
 use crate::model::{Group, Provider, Window};
 use serde_json::Value;
-use std::io::Read;
-use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub fn source() -> Source {
     Source {
@@ -49,37 +47,22 @@ fn fetch() -> Result<Fetched, String> {
 }
 
 fn run_usage() -> Result<String, String> {
-    let mut cmd = Command::new("agy");
-    cmd.args(["-p", "/usage", "--output-format", "json"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .current_dir(std::env::temp_dir());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    let mut child = cmd.spawn().map_err(|_| "agy não encontrado".to_string())?;
-    let mut stdout = child.stdout.take().ok_or("agy sem saída")?;
-    let reader = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = stdout.read_to_string(&mut s);
-        s
-    });
-    let deadline = Instant::now() + Duration::from_secs(45);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("agy não respondeu".into());
-            }
-        }
-    }
-    reader.join().map_err(|_| "agy falhou".to_string())
+    // Prefer the installed binary over a `.cmd` shim, which would add a `cmd.exe` in between.
+    let exe = dirs::data_local_dir()
+        .map(|d| d.join("agy").join("bin").join("agy.exe"))
+        .filter(|p| p.is_file())
+        .map_or_else(|| "agy".into(), |p| p.into_os_string());
+    crate::hidden::run(
+        &exe,
+        &["-p", "/usage", "--output-format", "json"],
+        &std::env::temp_dir(),
+        Duration::from_secs(45),
+    )
+    .map_err(|e| match e.as_str() {
+        "not found" => "agy não encontrado".to_string(),
+        "timeout" => "agy não respondeu".to_string(),
+        _ => "agy falhou".to_string(),
+    })
 }
 
 pub(crate) fn parse(v: &Value) -> Vec<Group> {
@@ -140,6 +123,14 @@ fn short_group(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Calls the real `agy` (no model turn). Run with `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn live_usage() {
+        let f = fetch().unwrap();
+        assert!(!f.groups.is_empty());
+    }
 
     #[test]
     fn parses_usage_command() {

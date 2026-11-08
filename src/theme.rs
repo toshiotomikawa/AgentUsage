@@ -8,6 +8,8 @@ use std::sync::Arc;
 const OK: Color32 = Color32::from_rgb(0x00, 0x90, 0x51);
 /// Needs attention (low, or used faster than the window elapses).
 const WARN: Color32 = Color32::from_rgb(0xC6, 0x90, 0x35);
+/// Below 10% left.
+const CRIT: Color32 = Color32::from_rgb(0x77, 0x00, 0x01);
 /// Depleted until the window resets.
 const EMPTY: Color32 = Color32::from_rgb(0x8F, 0x93, 0x94);
 /// Window close button on hover.
@@ -26,6 +28,7 @@ pub struct Palette {
     pub track: Color32,
     pub ok: Color32,
     pub warn: Color32,
+    pub crit: Color32,
     pub empty: Color32,
     pub close_hover: Color32,
     pub pace: Color32,
@@ -46,6 +49,7 @@ impl Palette {
             track: Color32::from_rgb(0xEE, 0xEE, 0xEA),
             ok: OK,
             warn: WARN,
+            crit: CRIT,
             empty: EMPTY,
             close_hover: CLOSE,
             pace: Color32::from_rgb(0x17, 0x17, 0x1A),
@@ -66,6 +70,7 @@ impl Palette {
             track: Color32::from_rgb(0x26, 0x26, 0x2B),
             ok: OK,
             warn: WARN,
+            crit: CRIT,
             empty: EMPTY,
             close_hover: CLOSE,
             pace: Color32::from_rgb(0xEC, 0xEC, 0xEE),
@@ -76,65 +81,64 @@ impl Palette {
     pub fn status(&self, s: Status) -> Color32 {
         match s {
             Status::Ok => self.ok,
-            Status::Warning | Status::Critical => self.warn,
+            Status::Warning => self.warn,
+            Status::Critical => self.crit,
             Status::Empty => self.empty,
         }
     }
 }
 
 pub const SEMIBOLD: &str = "semibold";
+/// Fixed-width digits for numbers that animate (percentages, countdowns).
+pub const MONO: &str = "mono";
+pub const MONO_SEMIBOLD: &str = "mono-semibold";
 
-/// Use the system UI font when available (Segoe UI on Windows); fall back to egui's defaults.
+/// Google Sans for text and Google Sans Mono for numbers, from the system or the user's font
+/// folder; Segoe UI / Consolas (or egui's built-ins) when they are not installed.
 pub fn install_fonts(ctx: &egui::Context) {
-    let mut fonts = FontDefinitions::default();
-    let candidates: &[(&str, &[&str])] = &[
+    let mut dirs = vec![std::path::PathBuf::from("C:/Windows/Fonts")];
+    if let Some(local) = dirs::data_local_dir() {
+        dirs.push(local.join("Microsoft/Windows/Fonts"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".local/share/fonts"));
+        dirs.push(home.join("Library/Fonts"));
+    }
+    let read = |names: &[&str]| {
+        names
+            .iter()
+            .flat_map(|n| dirs.iter().map(move |d| d.join(n)))
+            .find_map(|p| std::fs::read(p).ok())
+    };
+    let wanted: [(&str, &[&str]); 4] = [
+        ("ui", &["GoogleSans-Regular.ttf", "segoeui.ttf"]),
+        (SEMIBOLD, &["GoogleSans-SemiBold.ttf", "seguisb.ttf"]),
+        (MONO, &["Google-Sans-Mono-Regular.ttf", "consola.ttf"]),
         (
-            "ui",
-            &[
-                "C:/Windows/Fonts/segoeui.ttf",
-                "/System/Library/Fonts/SFNS.ttf",
-                "/usr/share/fonts/truetype/inter/Inter-Regular.ttf",
-            ],
-        ),
-        (
-            SEMIBOLD,
-            &[
-                "C:/Windows/Fonts/seguisb.ttf",
-                "/System/Library/Fonts/SFNS.ttf",
-                "/usr/share/fonts/truetype/inter/Inter-SemiBold.ttf",
-            ],
+            MONO_SEMIBOLD,
+            &["Google-Sans-Mono-SemiBold.ttf", "consolab.ttf"],
         ),
     ];
-    let mut semibold_loaded = false;
-    for (name, paths) in candidates {
-        if let Some(bytes) = paths.iter().find_map(|p| std::fs::read(p).ok()) {
+    let mut fonts = FontDefinitions::default();
+    let base = fonts
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    for (name, files) in wanted {
+        let mut family = Vec::new();
+        if let Some(bytes) = read(files) {
             fonts
                 .font_data
-                .insert((*name).to_string(), Arc::new(FontData::from_owned(bytes)));
-            if *name == "ui" {
-                fonts
-                    .families
-                    .entry(FontFamily::Proportional)
-                    .or_default()
-                    .insert(0, "ui".into());
-            } else {
-                semibold_loaded = true;
-            }
+                .insert(name.to_string(), Arc::new(FontData::from_owned(bytes)));
+            family.push(name.to_string());
+        }
+        family.extend(base.iter().cloned());
+        if name == "ui" {
+            fonts.families.insert(FontFamily::Proportional, family);
+        } else {
+            fonts.families.insert(FontFamily::Name(name.into()), family);
         }
     }
-    let mut semibold = Vec::new();
-    if semibold_loaded {
-        semibold.push(SEMIBOLD.to_string());
-    }
-    semibold.extend(
-        fonts
-            .families
-            .get(&FontFamily::Proportional)
-            .cloned()
-            .unwrap_or_default(),
-    );
-    fonts
-        .families
-        .insert(FontFamily::Name(SEMIBOLD.into()), semibold);
     ctx.set_fonts(fonts);
 }
