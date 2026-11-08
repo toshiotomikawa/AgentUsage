@@ -60,14 +60,26 @@ fn run(
     ctx: eframe::egui::Context,
 ) {
     let mut last_run: HashMap<String, Instant> = HashMap::new();
+    let mut manual = false;
     loop {
         {
             let mut s = shared.lock().unwrap();
             s.last_refresh = Some(Utc::now());
         }
         for src in &sources {
+            // A manual refresh skips the minimum interval for accounts still without data
+            // (e.g. right after signing in again); the providers' own backoff still applies.
+            let has_data = || {
+                shared
+                    .lock()
+                    .unwrap()
+                    .accounts
+                    .iter()
+                    .any(|a| a.key == src.key && matches!(a.reading, Reading::Ok(_)))
+            };
             if let (Some(min), Some(at)) = (src.min_interval, last_run.get(&src.key))
                 && at.elapsed() < Duration::from_secs(min)
+                && (!manual || has_data())
             {
                 continue;
             }
@@ -77,7 +89,8 @@ fn run(
         ctx.request_repaint();
         // Wait for the interval or a manual refresh.
         match rx.recv_timeout(every) {
-            Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Ok(()) => manual = true,
+            Err(mpsc::RecvTimeoutError::Timeout) => manual = false,
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
         // Collapse a burst of clicks into one refresh.
