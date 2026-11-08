@@ -27,6 +27,8 @@ agente de IA: Antigravity, Claude (várias contas), Codex, Cursor & Grok e OpenC
 
 O app lê o login que cada CLI já guarda na sua máquina e consulta somente o serviço do próprio
 fornecedor. Os tokens vão só por HTTPS, sem redirecionamento, ao serviço do próprio fornecedor.
+Quando o login do Claude vence, o app o renova como o próprio Claude Code faz e o grava de volta
+no mesmo arquivo, sem precisar abrir o Claude Code.
 
 | Agente | Login lido | Consulta |
 | --- | --- | --- |

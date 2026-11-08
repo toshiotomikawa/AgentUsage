@@ -1,19 +1,26 @@
 //! Prepares the app icon from `assets/icon.png` (a dark logo):
-//! - `OUT_DIR/icon-mask.png`: the logo alone, white with alpha, tightly framed and optically
-//!   centered. The app tints it (black on light, white on dark).
-//! - `OUT_DIR/icon-round.png` and an embedded `.ico`: the logo on a white disc for the taskbar,
-//!   Explorer and shortcuts, where the background color is unknown.
+//! - `OUT_DIR/icon-mask.png`: the logo alone, white with alpha, tightly framed and centered.
+//!   The app tints it (black on light, white on dark).
+//! - `OUT_DIR/icon-tile.png` and an embedded `.ico`: the logo on a white squircle for the
+//!   taskbar, Start menu, Explorer and shortcuts, where the background color is unknown. Every
+//!   `.ico` size is drawn at its own size with supersampling, not shrunk from a big one, so edges
+//!   stay smooth and no dark fringe appears around the tile.
 
 use image::codecs::ico::{IcoEncoder, IcoFrame};
 use image::imageops::FilterType;
 use image::{GrayImage, Luma, Rgba, RgbaImage};
 use std::path::PathBuf;
 
-const SIZE: u32 = 512;
-/// Logo height relative to the disc diameter.
-const ON_DISC: f32 = 0.70;
-/// Logo height relative to the mask canvas.
+/// Side of the framed logo maps (high, so the small sizes sample a sharp source).
+const SIZE: u32 = 1024;
+/// Logo's longer side relative to the tile.
+const ON_TILE: f32 = 0.70;
+/// Logo's longer side relative to the mask canvas.
 const ON_MASK: f32 = 0.96;
+/// Squircle exponent: 2 is a circle, higher gets closer to a square.
+const SQUIRCLE: f32 = 5.0;
+/// Subsamples per pixel side when drawing a tile.
+const SUPER: u32 = 8;
 
 /// Coverage of the dark logo, 0..=255, whatever the source background (white or transparent).
 fn coverage() -> GrayImage {
@@ -27,20 +34,16 @@ fn coverage() -> GrayImage {
     })
 }
 
-/// Crop to the logo and place it in a square canvas, optically centered: vertically on its
-/// bounding box, horizontally halfway between the bounding box and the ink's center of mass.
+/// Crop to the logo and center its bounding box in a square canvas.
 fn framed(cov: &GrayImage, fill: f32) -> GrayImage {
     let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
-    let (mut mass, mut mx) = (0.0f64, 0.0f64);
     for (x, y, p) in cov.enumerate_pixels() {
-        if p[0] > 24 {
+        if p[0] > 127 {
             x0 = x0.min(x);
             y0 = y0.min(y);
             x1 = x1.max(x);
             y1 = y1.max(y);
         }
-        mass += p[0] as f64;
-        mx += p[0] as f64 * x as f64;
     }
     let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
     let crop = image::imageops::crop_imm(cov, x0, y0, bw, bh).to_image();
@@ -49,32 +52,58 @@ fn framed(cov: &GrayImage, fill: f32) -> GrayImage {
         (bw as f32 * scale).round() as u32,
         (bh as f32 * scale).round() as u32,
     );
-    let logo = image::imageops::resize(&crop, w, h, FilterType::Lanczos3);
-    let centroid = (mx / mass) as f32 - x0 as f32;
-    let optical_x = (bw as f32 / 2.0 + centroid) / 2.0 * scale;
-    let ox = (SIZE as f32 / 2.0 - optical_x).round() as i64;
-    let oy = ((SIZE - h) / 2) as i64;
+    let logo = image::imageops::resize(&crop, w, h, FilterType::CatmullRom);
     let mut out = GrayImage::new(SIZE, SIZE);
-    image::imageops::overlay(&mut out, &logo, ox, oy);
+    image::imageops::overlay(
+        &mut out,
+        &logo,
+        ((SIZE - w) / 2) as i64,
+        ((SIZE - h) / 2) as i64,
+    );
     out
 }
 
 fn mask(cov: &GrayImage) -> RgbaImage {
     let m = framed(cov, ON_MASK);
-    RgbaImage::from_fn(SIZE, SIZE, |x, y| {
-        Rgba([255, 255, 255, m.get_pixel(x, y)[0]])
-    })
+    let m = image::imageops::resize(&m, 512, 512, FilterType::Triangle);
+    RgbaImage::from_fn(512, 512, |x, y| Rgba([255, 255, 255, m.get_pixel(x, y)[0]]))
 }
 
-fn round(cov: &GrayImage) -> RgbaImage {
-    let m = framed(cov, ON_DISC);
-    let r = SIZE as f32 / 2.0;
-    RgbaImage::from_fn(SIZE, SIZE, |x, y| {
-        let dx = x as f32 + 0.5 - r;
-        let dy = y as f32 + 0.5 - r;
-        let edge = (r - 0.5 - (dx * dx + dy * dy).sqrt()).clamp(0.0, 1.0);
-        let ink = 255 - m.get_pixel(x, y)[0];
-        Rgba([ink, ink, ink, (edge * 255.0).round() as u8])
+/// Logo coverage (0..=1) at a point of the unit square, bilinear.
+fn sample(m: &GrayImage, u: f32, v: f32) -> f32 {
+    let x = (u * SIZE as f32 - 0.5).clamp(0.0, (SIZE - 1) as f32);
+    let y = (v * SIZE as f32 - 0.5).clamp(0.0, (SIZE - 1) as f32);
+    let (x0, y0) = (x.floor() as u32, y.floor() as u32);
+    let (x1, y1) = ((x0 + 1).min(SIZE - 1), (y0 + 1).min(SIZE - 1));
+    let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+    let p = |x, y| m.get_pixel(x, y)[0] as f32 / 255.0;
+    let top = p(x0, y0) * (1.0 - fx) + p(x1, y0) * fx;
+    let bottom = p(x0, y1) * (1.0 - fx) + p(x1, y1) * fx;
+    top * (1.0 - fy) + bottom * fy
+}
+
+/// The black logo on a white squircle filling the whole `side`×`side` image.
+fn tile(m: &GrayImage, side: u32) -> RgbaImage {
+    let n = (side * SUPER) as f32;
+    RgbaImage::from_fn(side, side, |x, y| {
+        let (mut inside, mut ink) = (0.0f32, 0.0f32);
+        for sy in 0..SUPER {
+            for sx in 0..SUPER {
+                let u = ((x * SUPER + sx) as f32 + 0.5) / n;
+                let v = ((y * SUPER + sy) as f32 + 0.5) / n;
+                let (dx, dy) = ((2.0 * u - 1.0).abs(), (2.0 * v - 1.0).abs());
+                if dx.powf(SQUIRCLE) + dy.powf(SQUIRCLE) <= 1.0 {
+                    inside += 1.0;
+                    ink += sample(m, u, v);
+                }
+            }
+        }
+        if inside == 0.0 {
+            return Rgba([255, 255, 255, 0]);
+        }
+        let shade = (255.0 * (1.0 - ink / inside)).round() as u8;
+        let alpha = (255.0 * inside / (SUPER * SUPER) as f32).round() as u8;
+        Rgba([shade, shade, shade, alpha])
     })
 }
 
@@ -84,14 +113,16 @@ fn main() {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let cov = coverage();
     mask(&cov).save(out_dir.join("icon-mask.png")).unwrap();
-    let disc = round(&cov);
-    disc.save(out_dir.join("icon-round.png")).unwrap();
+    let logo = framed(&cov, ON_TILE);
+    tile(&logo, 256)
+        .save(out_dir.join("icon-tile.png"))
+        .unwrap();
 
     let ico = out_dir.join("icon.ico");
     let frames: Vec<IcoFrame> = [256u32, 64, 48, 40, 32, 24, 20, 16]
         .iter()
         .map(|&s| {
-            let img = image::imageops::resize(&disc, s, s, FilterType::Lanczos3);
+            let img = tile(&logo, s);
             IcoFrame::as_png(img.as_raw(), s, s, image::ExtendedColorType::Rgba8).unwrap()
         })
         .collect();

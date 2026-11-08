@@ -9,7 +9,7 @@ use image::RgbaImage;
 use image::imageops::FilterType;
 
 /// The logo on a white disc (window and taskbar icon).
-pub const APP_ICON: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon-round.png"));
+pub const APP_ICON: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon-tile.png"));
 /// The logo alone, white with alpha, for tinting inside the app.
 const APP_MASK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon-mask.png"));
 

@@ -49,8 +49,8 @@ const DATA: &[(&str, &str)] = &[
         "login expired — open the agent to renew it",
     ),
     (
-        "login expirado — abra o Claude Code nesta conta",
-        "login expired — open Claude Code with this account",
+        "login expirado — entre de novo no Claude Code",
+        "login expired — sign in to Claude Code again",
     ),
     (
         "limite de consultas — tentando de novo em breve",
@@ -118,8 +118,8 @@ mod tests {
         assert_eq!(Lang::En.data("Auto · semanal"), "Auto · weekly");
         assert_eq!(Lang::En.data("sem conexão"), "offline");
         assert_eq!(
-            Lang::En.data("login expirado — abra o Claude Code nesta conta"),
-            "login expired — open Claude Code with this account"
+            Lang::En.data("login expirado — entre de novo no Claude Code"),
+            "login expired — sign in to Claude Code again"
         );
         assert_eq!(
             Lang::En.data("serviço respondeu 500"),
