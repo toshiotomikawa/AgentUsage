@@ -8,6 +8,9 @@
 use std::path::Path;
 use std::time::Duration;
 
+/// Output beyond this is not a usage report; the run fails instead of growing without bound.
+const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
+
 #[cfg(not(windows))]
 pub fn run(
     exe: &std::ffi::OsStr,
@@ -28,7 +31,7 @@ pub fn run(
     let mut out = child.stdout.take().ok_or("no output")?;
     let reader = std::thread::spawn(move || {
         let mut s = String::new();
-        let _ = out.read_to_string(&mut s);
+        let _ = (&mut out).take(MAX_OUTPUT + 1).read_to_string(&mut s);
         s
     });
     let deadline = std::time::Instant::now() + timeout;
@@ -114,20 +117,27 @@ pub fn run(
             return Err("pipe".into());
         }
         let write = Owned(write);
-        SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0);
         let reader_file = File::from_raw_handle(read as _);
+        if SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0) == 0 {
+            return Err("pipe".into());
+        }
 
         // Job: closing it ends every process the program started.
+        // Without it a helper could outlive the call and hold the pipe open, so no job, no run.
         let job = Owned(CreateJobObjectW(null(), null()));
-        if !job.0.is_null() {
-            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            SetInformationJobObject(
-                job.0,
-                JobObjectExtendedLimitInformation,
-                &info as *const _ as *const _,
-                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            );
+        if job.0.is_null() {
+            return Err("job".into());
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if SetInformationJobObject(
+            job.0,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        ) == 0
+        {
+            return Err("job".into());
         }
 
         let mut si: STARTUPINFOW = std::mem::zeroed();
@@ -153,17 +163,17 @@ pub fn run(
         }
         let process = Owned(pi.hProcess);
         let thread = Owned(pi.hThread);
-        if !job.0.is_null() {
-            AssignProcessToJobObject(job.0, process.0);
+        // Still suspended: nothing has run yet if either step fails.
+        if AssignProcessToJobObject(job.0, process.0) == 0 || ResumeThread(thread.0) == u32::MAX {
+            TerminateProcess(process.0, 1);
+            return Err("job".into());
         }
-        ResumeThread(thread.0);
         // Only the child (and its helpers) hold the write end now.
         drop(write);
 
         let reader = std::thread::spawn(move || {
             let mut s = String::new();
-            let mut f = reader_file;
-            let _ = f.read_to_string(&mut s);
+            let _ = reader_file.take(MAX_OUTPUT + 1).read_to_string(&mut s);
             s
         });
         let ms = timeout.as_millis().min(u32::MAX as u128) as u32;
@@ -174,6 +184,9 @@ pub fn run(
         // Ends any helper still running, which also closes the pipe for the reader.
         drop(job);
         let out = reader.join().map_err(|_| "failed".to_string())?;
+        if out.len() as u64 > MAX_OUTPUT {
+            return Err("failed".into());
+        }
         if finished {
             Ok(out)
         } else {

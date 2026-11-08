@@ -91,7 +91,7 @@ const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 
 /// The account a token belongs to, asked from the service once per token. The `.claude.json`
 /// files cannot be trusted for this: the home one follows whichever login ran last.
-fn token_account(dir: &Path, token: &str, backoff: &Mutex<Backoff>) -> Option<String> {
+fn token_account(token: &str, backoff: &Mutex<Backoff>) -> Option<String> {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let mut h = DefaultHasher::new();
     token.hash(&mut h);
@@ -120,28 +120,21 @@ fn token_account(dir: &Path, token: &str, backoff: &Mutex<Backoff>) -> Option<St
             backoff.lock().unwrap().who = Some((key, Some(w.clone())));
             Some(w)
         }
-        // Not cached, so the next read asks again.
-        None => account_email(dir).filter(|_| !is_default(dir)),
+        // Not cached, so the next read asks again; meanwhile the card shows the folder.
+        None => None,
     }
 }
 
-/// `~/.claude`, whose email file is the shared one in the home folder.
-fn is_default(dir: &Path) -> bool {
-    dirs::home_dir()
-        .and_then(|h| h.join(".claude").canonicalize().ok())
-        .is_some_and(|d| d == dir)
-}
-
-fn account_email(dir: &Path) -> Option<String> {
-    // Claude Code keeps the account in `.claude.json`: inside the config folder when
-    // CLAUDE_CONFIG_DIR is set, next to it (in the home folder) for the default `~/.claude`.
-    let candidates = [dir.join(".claude.json"), dir.parent()?.join(".claude.json")];
-    candidates.iter().find_map(|p| {
-        let v = read_json(p).ok()?;
-        v.pointer("/oauthAccount/emailAddress")?
-            .as_str()
-            .map(email_local_part)
-    })
+/// `Retry-After` as seconds or as an HTTP date.
+fn parse_retry_after(v: &str) -> Option<Duration> {
+    let v = v.trim();
+    if let Ok(secs) = v.parse::<u64>() {
+        return Some(Duration::from_secs(secs));
+    }
+    let at = chrono::DateTime::parse_from_rfc2822(v).ok()?;
+    (at.with_timezone(&chrono::Utc) - chrono::Utc::now())
+        .to_std()
+        .ok()
 }
 
 fn fetch(dir: &Path, backoff: &Mutex<Backoff>) -> Result<Fetched, String> {
@@ -179,14 +172,18 @@ fn fetch(dir: &Path, backoff: &Mutex<Backoff>) -> Result<Fetched, String> {
             .headers()
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .map(Duration::from_secs);
+            .and_then(parse_retry_after);
         let mut b = backoff.lock().unwrap();
         b.wait = (b.wait * 2)
             .max(Duration::from_secs(MIN_INTERVAL_SECS))
-            .max(retry_after.unwrap_or_default())
             .min(MAX_BACKOFF);
-        b.until = Some(Instant::now() + b.wait);
+        // Our own doubling is capped; a longer wait asked by the service is not shortened.
+        let wait = b.wait.max(retry_after.unwrap_or_default());
+        b.until = Some(
+            Instant::now()
+                .checked_add(wait)
+                .unwrap_or_else(|| Instant::now() + MAX_BACKOFF * 48),
+        );
         return Err(status_error(429));
     }
     {
@@ -231,7 +228,21 @@ fn fetch(dir: &Path, backoff: &Mutex<Backoff>) -> Result<Fetched, String> {
             name: String::new(),
             windows,
         }],
-        account: token_account(dir, token, backoff),
+        account: token_account(token, backoff),
         title: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_after_forms() {
+        assert_eq!(parse_retry_after(" 120 "), Some(Duration::from_secs(120)));
+        let later = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc2822();
+        let d = parse_retry_after(&later).unwrap();
+        assert!(d > Duration::from_secs(7000));
+        assert_eq!(parse_retry_after("soon"), None);
+    }
 }

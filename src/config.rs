@@ -39,12 +39,13 @@ impl Config {
         let Some(path) = Self::path() else {
             return Self::default();
         };
-        match std::fs::read_to_string(&path) {
-            Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
-                eprintln!("config inválida em {}: {e}", path.display());
+        match crate::providers::read_small(&path) {
+            // The error text can quote the file, so it is not printed.
+            Some(text) => toml::from_str(&text).unwrap_or_else(|_| {
+                eprintln!("config.toml inválido; usando os padrões");
                 Self::default()
             }),
-            Err(_) => Self::default(),
+            None => Self::default(),
         }
     }
 }

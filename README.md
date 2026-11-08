@@ -18,14 +18,15 @@ agente de IA: Antigravity, Claude (várias contas), Codex, Cursor & Grok e OpenC
 - O anel no canto de cada cartão mostra a janela mais apertada daquela conta.
 - Os detalhes ficam escondidos e aparecem ao passar o mouse: data da renovação e previsão
   ("acaba em 2h 10m").
-- Atualiza sozinho a cada 60 s. **F5** ou o botão no canto atualizam na hora.
+- Atualiza sozinho a cada 60 s; o Claude, a cada 5 min, e espera mais quando o serviço pede.
+  **F5** ou o botão no canto pedem uma leitura nova dentro desses limites.
 
 ![AgentUsage, tema escuro](docs/demo-dark.png)
 
 ## De onde vêm os dados
 
 O app lê o login que cada CLI já guarda na sua máquina e consulta somente o serviço do próprio
-fornecedor. Nenhum token sai do computador para qualquer outro lugar.
+fornecedor. Os tokens vão só por HTTPS, sem redirecionamento, ao serviço do próprio fornecedor.
 
 | Agente | Login lido | Consulta |
 | --- | --- | --- |

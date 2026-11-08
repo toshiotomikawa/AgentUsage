@@ -41,9 +41,8 @@ fn auth_file() -> PathBuf {
 }
 
 fn post(path: &str, token: &str) -> Result<Value, String> {
-    let endpoint = std::env::var("CURSOR_API_ENDPOINT").unwrap_or_else(|_| ENDPOINT.into());
     let mut resp = agent()
-        .post(format!("{}{path}", endpoint.trim_end_matches('/')))
+        .post(format!("{ENDPOINT}{path}"))
         .header("Authorization", &format!("Bearer {token}"))
         .header("Content-Type", "application/json")
         .header("Connect-Protocol-Version", "1")
@@ -76,7 +75,11 @@ fn fetch() -> Result<Fetched, String> {
         (Some(s), Some(e)) if e > s => Some((e - s).num_minutes() as u64),
         _ => None,
     };
-    let plan = usage.get("planUsage").cloned().unwrap_or(Value::Null);
+    // No plan block means no included quota to show, not an unused one.
+    let plan = usage
+        .get("planUsage")
+        .filter(|v| v.is_object())
+        .ok_or("sem limites informados")?;
     // proto3 JSON omits zeros: a missing percentage on a present plan means 0% used.
     let pct = |k: &str| plan.get(k).and_then(num).unwrap_or(0.0);
     let window = |label: &str, used: f64| {
@@ -108,6 +111,7 @@ fn fetch() -> Result<Fetched, String> {
             windows,
         }],
         account: None,
-        title: merged.then(|| "Cursor & Grok".to_string()),
+        // Cursor and Grok are shown together whatever the plan type.
+        title: Some("Cursor & Grok".to_string()),
     })
 }

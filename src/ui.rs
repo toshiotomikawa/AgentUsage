@@ -65,6 +65,8 @@ impl Metrics {
 }
 
 const BAR_H: f32 = 6.0;
+/// Densest layout: rows stay readable (label line plus bar) down to this scale.
+const MIN_K: f32 = 0.6;
 const BTN_R: f32 = 18.0;
 /// Narrowest card that still reads well, used before falling back to scrolling.
 const MIN_CARD_W: f32 = 220.0;
@@ -132,7 +134,7 @@ impl Dashboard {
         // ---------- header ----------
         // Buttons on the right (GitHub, language, theme, refresh); the name centered, or
         // left-aligned when the window is too narrow for both.
-        let head_alpha = ease_out_cubic(since / 0.5);
+        let head_alpha = ease_out_cubic(since / 0.25);
         let p = ui.painter().clone();
         let cy = top + BTN_R;
         let step = BTN_R * 2.0 + 10.0;
@@ -204,8 +206,10 @@ impl Dashboard {
         resp.on_hover_text(lang.t("Idioma", "Language"));
 
         // ---------- grid ----------
-        let grid_top = top + BTN_R * 2.0 + 44.0;
-        let avail_h = full.bottom() - grid_top - outer * 0.6;
+        let compact = full.height() < 640.0;
+        let head_gap = if compact { 14.0 } else { 44.0 };
+        let grid_top = top + BTN_R * 2.0 + head_gap;
+        let avail_h = full.bottom() - grid_top - outer * if compact { 0.3 } else { 0.6 };
 
         let mut cards: Vec<&Account> = f.accounts.iter().collect();
         cards.sort_by(|a, b| {
@@ -233,7 +237,7 @@ impl Dashboard {
             loop {
                 let m = Metrics::at(k);
                 let (rows, total_h) = grid_rows(&cards, cols, &m);
-                if total_h <= avail_h || k <= 0.8 {
+                if total_h <= avail_h || k <= MIN_K {
                     return (cols, m, rows, total_h);
                 }
                 k -= 0.05;
@@ -244,7 +248,7 @@ impl Dashboard {
         let mut cols = best.0;
         while best.3 > avail_h && cols < 3.min(n) {
             cols += 1;
-            let gap = Metrics::at(0.8).gap;
+            let gap = Metrics::at(MIN_K).gap;
             if (content_w - gap * (cols - 1) as f32) / (cols as f32) < MIN_CARD_W {
                 break;
             }
@@ -341,7 +345,7 @@ impl Dashboard {
         show_account: bool,
     ) {
         let lang = f.lang;
-        let appear = ease_out_cubic((since - 0.08 - idx as f32 * 0.06) / 0.55);
+        let appear = ease_out_cubic((since - idx as f32 * 0.03) / 0.25);
         if appear < 1.0 {
             self.tweens.active = true;
         }
@@ -469,8 +473,8 @@ impl Dashboard {
                         b.remaining,
                         0.0,
                         now,
-                        0.9,
-                        0.15 + idx as f32 * 0.06,
+                        0.3,
+                        0.05 + idx as f32 * 0.03,
                     );
                     let rc = pos2(inner.right() - 9.0, hy);
                     let ring_track = if st == Status::Empty {
@@ -515,7 +519,7 @@ impl Dashboard {
                     for (wi, w) in g.windows.iter().enumerate() {
                         let row =
                             Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), m.row));
-                        let delay = 0.2 + idx as f32 * 0.06 + row_i as f32 * 0.05;
+                        let delay = 0.05 + idx as f32 * 0.03 + row_i as f32 * 0.02;
                         let ctx = RowCtx {
                             pal,
                             lang,
@@ -538,7 +542,7 @@ impl Dashboard {
         let (pal, p, a, lang) = (c.pal, c.painter, c.alpha, c.lang);
         let st = w.status(c.now_utc);
         let color = pal.status(st);
-        let v = self.tweens.get(id, w.remaining, 0.0, c.now, 0.9, c.delay);
+        let v = self.tweens.get(id, w.remaining, 0.0, c.now, 0.3, c.delay);
         let resp = ui.interact(row, ui.scope_id().with(id), Sense::hover());
         let hover =
             ui.ctx()
@@ -590,11 +594,11 @@ impl Dashboard {
         }
         // Pace marker: where the fill would be at an even pace.
         if let Some(t) = w.time_left_fraction(c.now_utc) {
-            let tv = self
-                .tweens
-                .get(&format!("{id}:pace"), t, t, c.now, 0.6, c.delay + 0.4);
+            // Drawn straight from the clock: it moves too slowly to need a tween, and a tween
+            // restarted every second would keep the window repainting.
+            let tv = t;
             let appear = ease_in_out(
-                ((c.now as f32) - (self.start.unwrap_or(0.0) as f32) - c.delay - 0.5) / 0.4,
+                ((c.now as f32) - (self.start.unwrap_or(0.0) as f32) - c.delay - 0.2) / 0.2,
             );
             if appear < 1.0 {
                 self.tweens.active = true;

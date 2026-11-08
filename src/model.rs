@@ -40,7 +40,11 @@ impl Window {
     pub fn new(label: impl Into<String>, remaining: f32) -> Self {
         Self {
             label: label.into(),
-            remaining: remaining.clamp(0.0, 1.0),
+            remaining: if remaining.is_finite() {
+                remaining.clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
             resets_at: None,
             length: None,
         }
@@ -52,7 +56,7 @@ impl Window {
     }
 
     pub fn length_mins(mut self, mins: u64) -> Self {
-        self.length = Some(Duration::from_secs(mins * 60));
+        self.length = Some(Duration::from_secs(mins.saturating_mul(60)));
         self
     }
 
@@ -69,10 +73,11 @@ impl Window {
     }
 
     pub fn status(&self, now: DateTime<Utc>) -> Status {
-        if self.remaining <= 0.005 {
+        // Below 0.5% the bar reads "0%", so it is shown as depleted.
+        if self.remaining < 0.005 {
             return Status::Empty;
         }
-        if self.remaining <= 0.10 {
+        if self.remaining < 0.10 {
             return Status::Critical;
         }
         let behind_pace = self
@@ -168,5 +173,19 @@ mod tests {
     #[test]
     fn local_part() {
         assert_eq!(email_local_part("someone@example.com"), "someone");
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    #[test]
+    fn state_limits() {
+        let now = Utc::now();
+        assert_eq!(Window::new("x", f32::NAN).remaining, 0.0);
+        assert_eq!(Window::new("x", 0.10).status(now), Status::Warning);
+        assert_eq!(Window::new("x", 0.099).status(now), Status::Critical);
+        assert_eq!(Window::new("x", 0.004).status(now), Status::Empty);
     }
 }

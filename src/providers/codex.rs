@@ -35,8 +35,7 @@ fn fetch() -> Result<Fetched, String> {
         .ok_or("sem login do ChatGPT")?;
     let mut req = agent()
         .get(URL)
-        .header("Authorization", &format!("Bearer {token}"))
-        .header("User-Agent", "codex_cli_rs");
+        .header("Authorization", &format!("Bearer {token}"));
     if let Some(id) = auth.pointer("/tokens/account_id").and_then(Value::as_str) {
         req = req.header("ChatGPT-Account-Id", id);
     }
@@ -65,7 +64,7 @@ fn fetch() -> Result<Fetched, String> {
             .and_then(|n| from_epoch(n as i64))
             .or_else(|| {
                 let after = w.get("reset_after_seconds").and_then(num)?;
-                Some(Utc::now() + chrono::Duration::seconds(after as i64))
+                Utc::now().checked_add_signed(chrono::Duration::try_seconds(after as i64)?)
             });
         let mut win =
             Window::new(label_for_minutes(secs / 60), 1.0 - used as f32 / 100.0).resets(reset);

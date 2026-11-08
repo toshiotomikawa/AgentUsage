@@ -56,19 +56,41 @@ pub(crate) fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15)))
         .http_status_as_error(false)
+        // Tokens go only to the vendor's own HTTPS host: no plain HTTP, no redirects.
+        .https_only(true)
+        .max_redirects(0)
         .user_agent(concat!("agent-usage/", env!("CARGO_PKG_VERSION")))
         .build()
         .into()
 }
 
+/// Login and settings files are small; anything larger is not one.
+pub(crate) const MAX_FILE: u64 = 4 * 1024 * 1024;
+
 pub(crate) fn read_json(path: &Path) -> Result<Value, String> {
-    let text = std::fs::read_to_string(path).map_err(|_| "não conectado".to_string())?;
+    let text = read_small(path).ok_or_else(|| "não conectado".to_string())?;
     serde_json::from_str(&text).map_err(|_| "arquivo de login ilegível".to_string())
+}
+
+/// Read a regular file of at most `MAX_FILE` bytes (checked on the open handle).
+pub(crate) fn read_small(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let f = std::fs::File::open(path).ok()?;
+    let meta = f.metadata().ok()?;
+    if !meta.is_file() || meta.len() > MAX_FILE {
+        return None;
+    }
+    let mut s = String::new();
+    f.take(MAX_FILE + 1).read_to_string(&mut s).ok()?;
+    (s.len() as u64 <= MAX_FILE).then_some(s)
 }
 
 /// A failure that says nothing about whether the account exists (rate limit, network, server).
 pub(crate) fn is_transient(err: &str) -> bool {
-    err == status_error(429) || err == "sem conexão" || err.starts_with("serviço respondeu 5")
+    err == status_error(429)
+        || err == "sem conexão"
+        || err == "resposta inesperada"
+        || err.starts_with("serviço respondeu 5")
 }
 
 pub(crate) fn status_error(code: u16) -> String {
@@ -100,11 +122,12 @@ pub(crate) fn from_epoch(n: i64) -> Option<DateTime<Utc>> {
 }
 
 pub(crate) fn num(v: &Value) -> Option<f64> {
-    match v {
+    let n = match v {
         Value::Number(n) => n.as_f64(),
-        Value::String(s) => s.parse().ok(),
+        Value::String(s) => s.trim().parse().ok(),
         _ => None,
-    }
+    }?;
+    n.is_finite().then_some(n)
 }
 
 /// Label for a window from its length in minutes.

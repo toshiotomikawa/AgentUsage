@@ -44,7 +44,7 @@ impl Prefs {
 
     pub fn load() -> Self {
         Self::path()
-            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|p| crate::providers::read_small(&p))
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default()
     }

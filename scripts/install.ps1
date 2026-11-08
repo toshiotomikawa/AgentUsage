@@ -8,13 +8,16 @@ if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
 
 $dest = Join-Path $env:LOCALAPPDATA 'Programs\AgentUsage'
 New-Item -ItemType Directory -Force $dest | Out-Null
-# Close a running copy and wait until Windows releases the file.
-$running = Get-Process agent-usage -ErrorAction SilentlyContinue
+$exe = Join-Path $dest 'agent-usage.exe'
+# Close the installed copy only (not development builds) and wait until Windows releases the file.
+$running = Get-Process agent-usage -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -and $_.Path -eq $exe }
 if ($running) {
-    $running | Stop-Process -Force
+    $running | ForEach-Object { [void]$_.CloseMainWindow() }
+    $running | Wait-Process -Timeout 3 -ErrorAction SilentlyContinue
+    $running | Where-Object { -not $_.HasExited } | Stop-Process -Force
     $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
 }
-$exe = Join-Path $dest 'agent-usage.exe'
 for ($i = 0; ; $i++) {
     try {
         Copy-Item (Join-Path $root 'target\release\agent-usage.exe') $exe -Force -ErrorAction Stop

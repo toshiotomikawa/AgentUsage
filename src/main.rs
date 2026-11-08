@@ -218,7 +218,11 @@ fn window_icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
-    let args = parse_args();
+    let mut args = parse_args();
+    // Screenshots end up in docs and chats: they always use the fictional accounts.
+    if args.screenshot.is_some() {
+        args.demo = true;
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("AgentUsage")
