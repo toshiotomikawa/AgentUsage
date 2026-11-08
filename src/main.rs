@@ -69,7 +69,6 @@ struct App {
     dash: ui::Dashboard,
     icons: icons::Icons,
     prefs: Prefs,
-    refresh_every: u64,
     screenshot: Option<PathBuf>,
     shot_taken: Arc<Mutex<bool>>,
     demo_since: f64,
@@ -103,7 +102,6 @@ impl App {
             dash: ui::Dashboard::new(),
             icons: icons::Icons::load(&cc.egui_ctx),
             prefs,
-            refresh_every,
             screenshot: args.screenshot,
             shot_taken: Arc::new(Mutex::new(false)),
             demo_since: 0.0,
@@ -144,22 +142,16 @@ impl eframe::App for App {
         let body = chrome::title_bar(ui, &pal, &mut self.icons, self.prefs.lang, full);
         let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body));
 
-        let (accounts, busy, last) = match &self.data {
-            Data::Demo(a) => (
-                a.clone(),
-                time - self.demo_since < 0.9,
-                Some(now - chrono::Duration::seconds(12)),
-            ),
+        let (accounts, busy) = match &self.data {
+            Data::Demo(a) => (a.clone(), time - self.demo_since < 0.9),
             Data::Live(p) => {
                 let s = p.shared.lock().unwrap();
-                (s.accounts.clone(), s.in_flight > 0, s.last_refresh)
+                (s.accounts.clone(), s.in_flight > 0)
             }
         };
         let f = ui::Frame {
             accounts: &accounts,
             busy,
-            last_refresh: last,
-            refresh_every: self.refresh_every,
             now,
             lang: self.prefs.lang,
             theme: self.prefs.theme,

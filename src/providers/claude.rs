@@ -21,6 +21,8 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30 * 60);
 struct Backoff {
     until: Option<Instant>,
     wait: Duration,
+    /// Account behind the current token (hash of the token, email local part), asked once.
+    who: Option<(u64, Option<String>)>,
 }
 
 pub fn sources(cfg: &Config) -> Vec<Source> {
@@ -85,6 +87,51 @@ pub fn sources(cfg: &Config) -> Vec<Source> {
         .collect()
 }
 
+const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
+
+/// The account a token belongs to, asked from the service once per token. The `.claude.json`
+/// files cannot be trusted for this: the home one follows whichever login ran last.
+fn token_account(dir: &Path, token: &str, backoff: &Mutex<Backoff>) -> Option<String> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    token.hash(&mut h);
+    let key = h.finish();
+    if let Some((k, who)) = &backoff.lock().unwrap().who
+        && *k == key
+    {
+        return who.clone();
+    }
+    let who = agent()
+        .get(PROFILE_URL)
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .call()
+        .ok()
+        .filter(|r| r.status().is_success())
+        .and_then(|mut r| r.body_mut().read_json::<Value>().ok())
+        .and_then(|v| {
+            v.pointer("/account/email_address")
+                .or_else(|| v.pointer("/account/email"))
+                .and_then(Value::as_str)
+                .map(email_local_part)
+        });
+    match who {
+        Some(w) => {
+            backoff.lock().unwrap().who = Some((key, Some(w.clone())));
+            Some(w)
+        }
+        // Not cached, so the next read asks again.
+        None => account_email(dir).filter(|_| !is_default(dir)),
+    }
+}
+
+/// `~/.claude`, whose email file is the shared one in the home folder.
+fn is_default(dir: &Path) -> bool {
+    dirs::home_dir()
+        .and_then(|h| h.join(".claude").canonicalize().ok())
+        .is_some_and(|d| d == dir)
+}
+
 fn account_email(dir: &Path) -> Option<String> {
     // Claude Code keeps the account in `.claude.json`: inside the config folder when
     // CLAUDE_CONFIG_DIR is set, next to it (in the home folder) for the default `~/.claude`.
@@ -142,7 +189,11 @@ fn fetch(dir: &Path, backoff: &Mutex<Backoff>) -> Result<Fetched, String> {
         b.until = Some(Instant::now() + b.wait);
         return Err(status_error(429));
     }
-    *backoff.lock().unwrap() = Backoff::default();
+    {
+        let mut b = backoff.lock().unwrap();
+        b.until = None;
+        b.wait = Duration::ZERO;
+    }
     if code == 401 {
         return Err(EXPIRED.into());
     }
@@ -180,7 +231,7 @@ fn fetch(dir: &Path, backoff: &Mutex<Backoff>) -> Result<Fetched, String> {
             name: String::new(),
             windows,
         }],
-        account: account_email(dir),
+        account: token_account(dir, token, backoff),
         title: None,
     })
 }

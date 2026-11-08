@@ -16,8 +16,8 @@ agente de IA: Antigravity, Claude (várias contas), Codex, Cursor & Grok e OpenC
 - **O risquinho na barra marca o ritmo:** (passe o mouse para ver o estado) é onde a barra estaria com um consumo uniforme até a
   renovação. Barra à esquerda do risco quer dizer que você está gastando mais rápido que o tempo.
 - O anel no canto de cada cartão mostra a janela mais apertada daquela conta.
-- Os detalhes ficam escondidos e aparecem ao passar o mouse: data exata da renovação e previsão
-  ("neste ritmo, acaba em 2h 10m").
+- Os detalhes ficam escondidos e aparecem ao passar o mouse: data da renovação e previsão
+  ("acaba em 2h 10m").
 - Atualiza sozinho a cada 60 s. **F5** ou o botão no canto atualizam na hora.
 
 ![AgentUsage, tema escuro](docs/demo-dark.png)

@@ -18,8 +18,6 @@ use std::f32::consts::TAU;
 pub struct Frame<'a> {
     pub accounts: &'a [Account],
     pub busy: bool,
-    pub last_refresh: Option<DateTime<Utc>>,
-    pub refresh_every: u64,
     pub now: DateTime<Utc>,
     pub lang: Lang,
     pub theme: ThemeMode,
@@ -169,26 +167,7 @@ impl Dashboard {
         self.advance_spin(now, f.busy, ui.input(|i| i.stable_dt).min(0.05));
         refresh_icon(&p, refresh_c, 7.0, self.spin, glyph);
         act.refresh = resp.clicked();
-        resp.on_hover_ui(|ui| {
-            ui.label(egui::RichText::new(lang.t("Atualizar agora", "Refresh now")).strong());
-            if let Some(at) = f.last_refresh {
-                let ago = (f.now - at).num_seconds().max(0);
-                let next = (f.refresh_every as i64 - ago).max(0);
-                ui.label(match lang {
-                    Lang::Pt => format!(
-                        "Atualizado há {} · próxima em {}",
-                        short_secs(ago),
-                        short_secs(next)
-                    ),
-                    Lang::En => format!(
-                        "Updated {} ago · next in {}",
-                        short_secs(ago),
-                        short_secs(next)
-                    ),
-                });
-            }
-            ui.label(egui::RichText::new("F5").weak());
-        });
+        resp.on_hover_text(lang.t("Atualizar · F5", "Refresh · F5"));
 
         let (resp, hover) = self.round_button(ui, &p, pal, github_c, "github", head_alpha);
         let glyph = lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha);
@@ -200,30 +179,17 @@ impl Dashboard {
         if resp.clicked() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(icons::REPO_URL));
         }
-        resp.on_hover_ui(|ui| {
-            ui.label(egui::RichText::new(lang.t("Código no GitHub", "Source on GitHub")).strong());
-            ui.label(egui::RichText::new("github.com/toshiotomikawa/AgentUsage").weak());
-        });
+        resp.on_hover_text("GitHub");
 
         let (resp, hover) = self.round_button(ui, &p, pal, theme_c, "theme", head_alpha);
         let glyph = lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha);
         theme_icon(&p, theme_c, f.theme, glyph, pal.card);
         act.cycle_theme = resp.clicked();
-        resp.on_hover_ui(|ui| {
-            ui.label(
-                egui::RichText::new(format!(
-                    "{}: {}",
-                    lang.t("Tema", "Theme"),
-                    f.theme.name(lang)
-                ))
-                .strong(),
-            );
-            ui.label(format!(
-                "{} {}",
-                lang.t("Clique para", "Click for"),
-                f.theme.next().name(lang).to_lowercase()
-            ));
-        });
+        resp.on_hover_text(format!(
+            "{}: {}",
+            lang.t("Tema", "Theme"),
+            f.theme.name(lang)
+        ));
 
         let (resp, hover) = self.round_button(ui, &p, pal, lang_c, "lang", head_alpha);
         let glyph = lerp_color(pal.muted, pal.text, hover).gamma_multiply(head_alpha);
@@ -235,16 +201,10 @@ impl Dashboard {
             glyph,
         );
         act.toggle_lang = resp.clicked();
-        resp.on_hover_ui(|ui| {
-            ui.label(
-                egui::RichText::new(lang.t("Idioma: Português (BR)", "Language: English (US)"))
-                    .strong(),
-            );
-            ui.label(lang.t("Clique para English (US)", "Click for Português (BR)"));
-        });
+        resp.on_hover_text(lang.t("Idioma", "Language"));
 
         // ---------- grid ----------
-        let grid_top = top + BTN_R * 2.0 + 24.0;
+        let grid_top = top + BTN_R * 2.0 + 44.0;
         let avail_h = full.bottom() - grid_top - outer * 0.6;
 
         let mut cards: Vec<&Account> = f.accounts.iter().collect();
@@ -533,8 +493,7 @@ impl Dashboard {
                         Sense::hover(),
                     )
                     .on_hover_text(format!(
-                        "{}: {} · {}%",
-                        lang.t("Mais apertada", "Tightest"),
+                        "{} · {}%",
                         lang.data(&b.label),
                         pct(b.remaining)
                     ));
@@ -595,11 +554,10 @@ impl Dashboard {
             lerp_color(pal.muted, pal.text, hover * 0.6).gamma_multiply(a),
         );
         // Right side: countdown (muted), then the percentage.
-        let pct_color = if st == Status::Ok { pal.text } else { color };
         let pct_g = p.layout_no_wrap(
             format!("{}%", pct(v)),
             FontId::new(13.5, FontFamily::Name(MONO_SEMIBOLD.into())),
-            pct_color.gamma_multiply(a),
+            pal.text.gamma_multiply(a),
         );
         let pct_w = pct_g.size().x;
         p.galley(
@@ -658,43 +616,28 @@ impl Dashboard {
                 ),
             );
             tick_resp.on_hover_ui(|ui| {
-                ui.set_max_width(280.0);
                 ui.horizontal(|ui| {
                     let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
                     ui.painter().circle_filled(dot.center(), 4.0, color);
-                    ui.label(egui::RichText::new(status_name(st, lang)).strong());
+                    ui.label(status_name(st, lang));
                 });
-                ui.label(
-                    egui::RichText::new(lang.t(
-                        "O risco marca onde a barra estaria com um consumo uniforme até a renovação.",
-                        "The tick marks where the bar would be with even use until the reset.",
-                    ))
-                    .weak(),
-                );
             });
         }
 
-        resp.on_hover_ui(|ui| {
-            ui.set_max_width(280.0);
-            ui.label(
-                egui::RichText::new(format!(
-                    "{label} · {}% {}",
-                    pct(w.remaining),
-                    lang.t("restante", "left")
-                ))
-                .strong(),
-            );
-            if let Some(at) = w.resets_at {
-                ui.label(format!(
-                    "{} {}",
-                    lang.t("Renova", "Resets"),
-                    local_when(at, lang)
-                ));
-            }
-            if let Some(line) = pace_text(w, c.now_utc, lang) {
-                ui.label(egui::RichText::new(line).weak());
-            }
-        });
+        if w.resets_at.is_some() || pace_text(w, c.now_utc, lang).is_some() {
+            resp.on_hover_ui(|ui| {
+                if let Some(at) = w.resets_at {
+                    ui.label(format!(
+                        "{} {}",
+                        lang.t("Renova", "Resets"),
+                        local_when(at, lang)
+                    ));
+                }
+                if let Some(line) = pace_text(w, c.now_utc, lang) {
+                    ui.label(egui::RichText::new(line).weak());
+                }
+            });
+        }
     }
 }
 
@@ -743,8 +686,8 @@ fn status_name(st: Status, lang: Lang) -> &'static str {
     match st {
         Status::Ok => lang.t("No ritmo", "On pace"),
         Status::Warning => lang.t("Atenção", "Attention"),
-        Status::Critical => lang.t("Crítica: abaixo de 10%", "Critical: below 10%"),
-        Status::Empty => lang.t("Esgotada até renovar", "Depleted until it resets"),
+        Status::Critical => lang.t("Crítica", "Critical"),
+        Status::Empty => lang.t("Esgotada", "Depleted"),
     }
 }
 
@@ -778,14 +721,6 @@ fn countdown(secs: i64, lang: Lang) -> String {
     }
 }
 
-fn short_secs(s: i64) -> String {
-    if s < 60 {
-        format!("{s} s")
-    } else {
-        format!("{} min", s / 60)
-    }
-}
-
 fn local_when(at: DateTime<Utc>, lang: Lang) -> String {
     use chrono::{Datelike, Timelike};
     let l = at.with_timezone(&Local);
@@ -816,12 +751,7 @@ fn local_when(at: DateTime<Utc>, lang: Lang) -> String {
             }
         }
     };
-    format!(
-        "{day} {} {:02}:{:02}",
-        lang.t("às", "at"),
-        l.hour(),
-        l.minute()
-    )
+    format!("{day} {:02}:{:02}", l.hour(), l.minute())
 }
 
 /// Plain-language pace: will this window run out before it resets?
@@ -831,39 +761,27 @@ fn pace_text(w: &Window, now: DateTime<Utc>, lang: Lang) -> Option<String> {
     let elapsed = (1.0 - t_left) * len;
     let used = 1.0 - w.remaining;
     if w.remaining <= 0.005 {
-        return Some(
-            lang.t("Esgotada até renovar", "Depleted until it resets")
-                .into(),
-        );
+        return None;
     }
     if elapsed < len * 0.02 || used < 0.01 {
-        return Some(
-            lang.t(
-                "Ainda sem consumo relevante nesta janela",
-                "No meaningful use in this window yet",
-            )
-            .into(),
-        );
+        return None;
     }
     let rate = used / elapsed; // fraction per second
     let to_empty = w.remaining / rate;
     let until_reset = t_left * len;
-    if to_empty < until_reset {
-        let (a, b) = (
-            countdown(to_empty as i64, lang),
-            countdown((until_reset - to_empty) as i64, lang),
-        );
-        Some(match lang {
-            Lang::Pt => format!("Neste ritmo, acaba em {a} — {b} antes de renovar"),
-            Lang::En => format!("At this pace, runs out in {a} — {b} before it resets"),
-        })
+    Some(if to_empty < until_reset {
+        let a = countdown(to_empty as i64, lang);
+        match lang {
+            Lang::Pt => format!("Acaba em {a}"),
+            Lang::En => format!("Runs out in {a}"),
+        }
     } else {
         let leftover = pct((w.remaining - rate * until_reset).max(0.0));
-        Some(match lang {
-            Lang::Pt => format!("Neste ritmo, sobram ~{leftover}% na renovação"),
-            Lang::En => format!("At this pace, ~{leftover}% will be left at reset"),
-        })
-    }
+        match lang {
+            Lang::Pt => format!("Sobra ~{leftover}%"),
+            Lang::En => format!("~{leftover}% left at reset"),
+        }
+    })
 }
 
 fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
