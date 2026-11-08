@@ -373,6 +373,17 @@ fn fetch(dir: &Path, backoff: &Mutex<Backoff>) -> Result<Fetched, String> {
 mod tests {
     use super::*;
 
+    /// Reads every real Claude folder, renewing expired logins; prints only the outcome.
+    /// Run with `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn live_usage() {
+        for src in sources(&Config::default()) {
+            let r = (src.fetch)().map(|f| f.groups.len());
+            println!("{:?}: {r:?}", src.account);
+        }
+    }
+
     #[test]
     fn saved_login_keeps_other_fields() {
         let dir = std::env::temp_dir().join(format!("agent-usage-test-{}", std::process::id()));
