@@ -1,9 +1,9 @@
 //! Run a console program and capture its output without any window ever appearing.
 //!
-//! On Windows, `CREATE_NO_WINDOW` hides only the program itself: helper processes it starts get a
-//! fresh, visible console each (terminals flashing on screen). Instead the program gets a console
-//! of its own that starts hidden, which every helper inherits. A job object ties the helpers'
-//! lifetime to the call, so none is left behind and the output pipe always closes.
+//! On Windows, `CREATE_NO_WINDOW` hides only the program itself, and a console that merely starts
+//! hidden can still flash on screen for an instant. Instead the program runs inside a
+//! pseudoconsole, a console with no window at all, which every helper inherits. A job object ties
+//! the helpers' lifetime to the call, so none is left behind and the output pipe always closes.
 
 use std::path::Path;
 use std::time::Duration;
@@ -58,6 +58,7 @@ pub fn run(
     cwd: &Path,
     timeout: Duration,
 ) -> Result<String, String> {
+    use std::ffi::c_void;
     use std::fs::File;
     use std::io::Read;
     use std::os::windows::ffi::OsStrExt;
@@ -67,6 +68,9 @@ pub fn run(
         CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation, WAIT_OBJECT_0,
     };
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::System::Console::{
+        COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON,
+    };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
@@ -74,8 +78,10 @@ pub fn run(
     };
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
-        CREATE_NEW_CONSOLE, CREATE_SUSPENDED, CreateProcessW, PROCESS_INFORMATION, ResumeThread,
-        STARTF_USESHOWWINDOW, STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess,
+        CREATE_SUSPENDED, CreateProcessW, DeleteProcThreadAttributeList,
+        EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
+        PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, ResumeThread,
+        STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
         WaitForSingleObject,
     };
 
@@ -85,6 +91,19 @@ pub fn run(
             if !self.0.is_null() {
                 unsafe { CloseHandle(self.0) };
             }
+        }
+    }
+    /// Headless console: conhost runs without a window, so nothing can flash.
+    struct Pty(HPCON);
+    impl Drop for Pty {
+        fn drop(&mut self) {
+            unsafe { ClosePseudoConsole(self.0) };
+        }
+    }
+    struct Attrs(*mut c_void);
+    impl Drop for Attrs {
+        fn drop(&mut self) {
+            unsafe { DeleteProcThreadAttributeList(self.0) };
         }
     }
 
@@ -122,6 +141,52 @@ pub fn run(
             return Err("pipe".into());
         }
 
+        // Pseudoconsole: the program and every helper share one console that has no window.
+        // What it draws is drained and dropped; stdout still goes to the pipe above.
+        let (mut in_r, mut in_w): (HANDLE, HANDLE) = (null_mut(), null_mut());
+        if CreatePipe(&mut in_r, &mut in_w, null(), 0) == 0 {
+            return Err("pipe".into());
+        }
+        let (in_r, _in_w) = (Owned(in_r), Owned(in_w));
+        let (mut scr_r, mut scr_w): (HANDLE, HANDLE) = (null_mut(), null_mut());
+        if CreatePipe(&mut scr_r, &mut scr_w, null(), 0) == 0 {
+            return Err("pipe".into());
+        }
+        let scr_w = Owned(scr_w);
+        let mut screen = File::from_raw_handle(scr_r as _);
+        let mut hpc: HPCON = 0;
+        if CreatePseudoConsole(COORD { X: 200, Y: 50 }, in_r.0, scr_w.0, 0, &mut hpc) < 0 {
+            return Err("console".into());
+        }
+        let pty = Pty(hpc);
+        // The pseudoconsole keeps its own copies of these ends.
+        drop(in_r);
+        drop(scr_w);
+        let drain = std::thread::spawn(move || {
+            let _ = std::io::copy(&mut screen, &mut std::io::sink());
+        });
+
+        let mut size = 0usize;
+        InitializeProcThreadAttributeList(null_mut(), 1, 0, &mut size);
+        let mut buf = vec![0u8; size.max(1)];
+        let list = buf.as_mut_ptr() as *mut c_void;
+        if InitializeProcThreadAttributeList(list, 1, 0, &mut size) == 0 {
+            return Err("console".into());
+        }
+        let attrs = Attrs(list);
+        if UpdateProcThreadAttribute(
+            attrs.0,
+            0,
+            PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
+            pty.0 as *const c_void,
+            std::mem::size_of::<HPCON>(),
+            null_mut(),
+            null(),
+        ) == 0
+        {
+            return Err("console".into());
+        }
+
         // Job: closing it ends every process the program started.
         // Without it a helper could outlive the call and hold the pipe open, so no job, no run.
         let job = Owned(CreateJobObjectW(null(), null()));
@@ -140,11 +205,11 @@ pub fn run(
             return Err("job".into());
         }
 
-        let mut si: STARTUPINFOW = std::mem::zeroed();
-        si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-        si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
-        si.wShowWindow = 0; // SW_HIDE
-        si.hStdOutput = write.0;
+        let mut si: STARTUPINFOEXW = std::mem::zeroed();
+        si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        si.StartupInfo.hStdOutput = write.0;
+        si.lpAttributeList = attrs.0;
         let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
         let ok = CreateProcessW(
             null(),
@@ -152,10 +217,10 @@ pub fn run(
             null(),
             null(),
             1,
-            CREATE_NEW_CONSOLE | CREATE_SUSPENDED,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
             null(),
             cwd_w.as_ptr(),
-            &si,
+            &si.StartupInfo,
             &mut pi,
         );
         if ok == 0 {
@@ -184,6 +249,10 @@ pub fn run(
         // Ends any helper still running, which also closes the pipe for the reader.
         drop(job);
         let out = reader.join().map_err(|_| "failed".to_string())?;
+        // Closing the console ends what it draws, so the drain finishes too.
+        drop(attrs);
+        drop(pty);
+        let _ = drain.join();
         if out.len() as u64 > MAX_OUTPUT {
             return Err("failed".into());
         }

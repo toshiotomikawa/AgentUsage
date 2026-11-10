@@ -72,6 +72,13 @@ impl Window {
         Some((left / len).clamp(0.0, 1.0))
     }
 
+    /// Untouched window whose timer has not started: full quota, and the reset sits a whole
+    /// window away (vendors report "now + length" until the first message). Its countdown and
+    /// pace marker would only restate the window's length.
+    pub fn idle(&self, now: DateTime<Utc>) -> bool {
+        self.remaining >= 0.995 && self.time_left_fraction(now).is_none_or(|t| t >= 0.99)
+    }
+
     pub fn status(&self, now: DateTime<Utc>) -> Status {
         // Below 0.5% the bar reads "0%", so it is shown as depleted.
         if self.remaining < 0.005 {
@@ -248,6 +255,23 @@ mod tests {
         assert_eq!(Window::new("x", 0.0).status(now), Status::Empty);
         assert_eq!(Window::new("x", 0.08).status(now), Status::Critical);
         assert_eq!(Window::new("x", 0.9).status(now), Status::Ok);
+    }
+
+    #[test]
+    fn idle_window_has_no_timer() {
+        let now = Utc::now();
+        let fresh = Window::new("5 horas", 1.0)
+            .resets(Some(now + D::minutes(299)))
+            .length_mins(300);
+        assert!(fresh.idle(now));
+        let started = Window::new("5 horas", 1.0)
+            .resets(Some(now + D::minutes(88)))
+            .length_mins(300);
+        assert!(!started.idle(now));
+        let used = Window::new("5 horas", 0.9)
+            .resets(Some(now + D::minutes(299)))
+            .length_mins(300);
+        assert!(!used.idle(now));
     }
 
     #[test]

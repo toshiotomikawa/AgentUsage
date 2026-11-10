@@ -30,11 +30,23 @@ impl ThemeMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
     pub theme: ThemeMode,
     pub lang: Lang,
+    /// Cards the user hid from the dashboard (card keys).
+    pub hidden: Vec<String>,
+}
+
+impl Prefs {
+    pub fn toggle_card(&mut self, key: &str) {
+        if let Some(i) = self.hidden.iter().position(|k| k == key) {
+            self.hidden.remove(i);
+        } else {
+            self.hidden.push(key.to_string());
+        }
+    }
 }
 
 impl Prefs {

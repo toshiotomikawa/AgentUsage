@@ -161,6 +161,7 @@ impl eframe::App for App {
             lang: self.prefs.lang,
             theme: self.prefs.theme,
             update: self.updates.state(),
+            hidden: &self.prefs.hidden,
         };
         let act = self.dash.title_buttons(ui, &pal, &f, bar, buttons_right);
         self.dash.show(&mut body_ui, &pal, f);
@@ -178,6 +179,11 @@ impl eframe::App for App {
                 Data::Demo(_) => self.demo_since = time,
                 Data::Live(p) => p.refresh(),
             }
+        }
+        if let Some(key) = &act.toggle_card {
+            self.prefs.toggle_card(key);
+            self.prefs.save();
+            ctx.request_repaint();
         }
         if act.cycle_theme || act.toggle_lang {
             if act.cycle_theme {

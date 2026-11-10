@@ -166,7 +166,7 @@ fn apply(s: &mut Shared, src: &Source, result: Result<crate::providers::Fetched,
             let acc = &mut s.accounts[i];
             if transient && matches!(acc.reading, Reading::Ok(_)) {
                 // Keep the last good reading through a rate limit or a network blip.
-            } else if src.optional && !transient {
+            } else if e == crate::providers::INACTIVE || (src.optional && !transient) {
                 s.accounts.remove(i);
             } else {
                 // A lasting failure (expired login, signed out) replaces old numbers, which
@@ -239,6 +239,17 @@ mod tests {
         let src = source(true);
         let mut s = shared_with(&src);
         apply(&mut s, &src, Err("não conectado".into()));
+        assert!(s.accounts.is_empty());
+        apply(&mut s, &src, ok());
+        assert_eq!(s.accounts.len(), 1);
+    }
+
+    #[test]
+    fn inactive_subscription_hides_the_card() {
+        let src = source(false);
+        let mut s = shared_with(&src);
+        apply(&mut s, &src, ok());
+        apply(&mut s, &src, Err(crate::providers::INACTIVE.into()));
         assert!(s.accounts.is_empty());
         apply(&mut s, &src, ok());
         assert_eq!(s.accounts.len(), 1);

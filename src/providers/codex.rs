@@ -1,7 +1,9 @@
 //! Codex (ChatGPT plan) limits: `GET chatgpt.com/backend-api/wham/usage` with the ChatGPT sign-in
 //! Codex CLI keeps in `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`).
 
-use super::{Fetched, Source, agent, from_epoch, label_for_minutes, num, read_json, status_error};
+use super::{
+    Fetched, INACTIVE, Source, agent, from_epoch, label_for_minutes, num, read_json, status_error,
+};
 use crate::model::{Group, Provider, Window};
 use chrono::Utc;
 use serde_json::Value;
@@ -48,6 +50,10 @@ fn fetch() -> Result<Fetched, String> {
         .read_json()
         .map_err(|_| "resposta inesperada".to_string())?;
 
+    // A lapsed subscription falls back to the free plan: the card hides until it is paid again.
+    if is_inactive(&body) {
+        return Err(INACTIVE.into());
+    }
     let limits = body.get("rate_limit").ok_or("sem limites informados")?;
     let mut windows = Vec::new();
     for key in ["primary_window", "secondary_window"] {
@@ -84,4 +90,24 @@ fn fetch() -> Result<Fetched, String> {
         account: None,
         title: None,
     })
+}
+
+/// No paid ChatGPT plan behind this sign-in.
+fn is_inactive(body: &Value) -> bool {
+    matches!(
+        body.get("plan_type").and_then(Value::as_str),
+        Some("free" | "guest")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn free_plan_is_inactive() {
+        assert!(is_inactive(&serde_json::json!({"plan_type": "free"})));
+        assert!(!is_inactive(&serde_json::json!({"plan_type": "plus"})));
+        assert!(!is_inactive(&serde_json::json!({})));
+    }
 }

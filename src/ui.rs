@@ -23,6 +23,8 @@ pub struct Frame<'a> {
     pub lang: Lang,
     pub theme: ThemeMode,
     pub update: UpdateState,
+    /// Cards the user hid (card keys).
+    pub hidden: &'a [String],
 }
 
 /// What the user asked for this frame.
@@ -32,6 +34,8 @@ pub struct Actions {
     pub cycle_theme: bool,
     pub toggle_lang: bool,
     pub check_update: bool,
+    /// Show or hide this card.
+    pub toggle_card: Option<String>,
 }
 
 pub struct Dashboard {
@@ -46,6 +50,12 @@ pub struct Dashboard {
     menu_open: bool,
     /// When the menu last opened or closed, for its fade.
     menu_at: f64,
+    /// When each visible card first showed up (cards shown later fade in on their own).
+    born: HashMap<String, f64>,
+    /// Last frame's cards and where they were drawn, to fade out a card that goes away.
+    last: HashMap<String, (Account, Rect, bool)>,
+    /// Cards fading out: the card, its last place, whether its account showed, when it left.
+    leaving: Vec<(Account, Rect, bool, f64)>,
 }
 
 /// Layout metrics, scaled by density so everything fits without scrolling.
@@ -93,6 +103,8 @@ const MIN_CARD_W: f32 = 220.0;
 const TURN: f64 = 0.6;
 const DONE: f64 = 1.1;
 const MENU_FADE: f64 = 0.18;
+/// How long a card that goes away takes to fade out.
+const LEAVE: f64 = 0.22;
 
 impl Dashboard {
     pub fn new() -> Self {
@@ -104,6 +116,9 @@ impl Dashboard {
             done_at: None,
             menu_open: false,
             menu_at: f64::NEG_INFINITY,
+            born: HashMap::new(),
+            last: HashMap::new(),
+            leaving: Vec::new(),
         }
     }
 
@@ -209,9 +224,27 @@ impl Dashboard {
         const ITEM_H: f32 = 34.0;
         const MENU_W: f32 = 200.0;
         const MENU_PAD: f32 = 6.0;
+        // Divider plus the "CARDS" caption above the card switches.
+        const SECTION_H: f32 = 34.0;
+        // Every card, shown or hidden, alphabetical like the grid.
+        let merged = crate::model::merge_claude(f.accounts);
+        let mut cards: Vec<(String, crate::model::Provider, String)> = merged
+            .iter()
+            .map(|a| (a.key.clone(), a.provider, a.title().to_string()))
+            .collect();
+        cards.sort_by(|a, b| {
+            a.2.to_lowercase()
+                .cmp(&b.2.to_lowercase())
+                .then(a.0.cmp(&b.0))
+        });
+        let cards_h = if cards.is_empty() {
+            0.0
+        } else {
+            SECTION_H + ITEM_H * cards.len() as f32
+        };
         let menu_rect = Rect::from_min_size(
             pos2(menu_c.x + BTN_R - MENU_W, bar.bottom() + 4.0),
-            vec2(MENU_W, ITEM_H * 4.0 + MENU_PAD * 2.0),
+            vec2(MENU_W, ITEM_H * 4.0 + cards_h + MENU_PAD * 2.0),
         );
         let fade = ((now - self.menu_at) / MENU_FADE).min(1.0) as f32;
         let shown = if self.menu_open {
@@ -331,9 +364,94 @@ impl Dashboard {
                             chosen = Some(item);
                         }
                     }
-                    chosen
+                    // Card switches: each card can be hidden and shown again.
+                    let mut toggled = None;
+                    if !cards.is_empty() {
+                        let top = rect.top() + MENU_PAD + ITEM_H * 4.0;
+                        p.line_segment(
+                            [
+                                pos2(rect.left() + MENU_PAD + 4.0, top + 6.0),
+                                pos2(rect.right() - MENU_PAD - 4.0, top + 6.0),
+                            ],
+                            Stroke::new(1.0, pal.border.gamma_multiply(shown)),
+                        );
+                        p.text(
+                            pos2(rect.left() + MENU_PAD + 10.0, top + 22.0),
+                            Align2::LEFT_CENTER,
+                            lang.t("CARTÕES", "CARDS"),
+                            FontId::new(10.5, FontFamily::Name(SEMIBOLD.into())),
+                            pal.faint.gamma_multiply(shown),
+                        );
+                        for (i, (key, provider, title)) in cards.iter().enumerate() {
+                            let r = Rect::from_min_size(
+                                pos2(rect.left() + MENU_PAD, top + SECTION_H + i as f32 * ITEM_H),
+                                vec2(MENU_W - MENU_PAD * 2.0, ITEM_H),
+                            );
+                            let resp = ui.interact(
+                                r,
+                                ui.scope_id().with(("card-sw", key)),
+                                Sense::click(),
+                            );
+                            let h = ui.ctx().animate_bool_with_time(
+                                ui.scope_id().with(("card-sw-h", key)),
+                                resp.hovered(),
+                                0.15,
+                            );
+                            let on = ui.ctx().animate_bool_with_time(
+                                ui.scope_id().with(("card-sw-on", key)),
+                                !f.hidden.contains(key),
+                                0.2,
+                            );
+                            if h > 0.0 {
+                                p.rect_filled(
+                                    r,
+                                    CornerRadius::same(7),
+                                    pal.track.gamma_multiply(h * shown),
+                                );
+                            }
+                            let ink = lerp_color(pal.faint, pal.text, 0.35 + 0.45 * on + 0.2 * h)
+                                .gamma_multiply(shown);
+                            let ic = pos2(r.left() + 18.0, r.center().y);
+                            icons::paint_provider(
+                                ui,
+                                *provider,
+                                Rect::from_center_size(ic, vec2(14.0, 14.0)),
+                                ink,
+                                shown,
+                            );
+                            p.text(
+                                pos2(r.left() + 40.0, r.center().y + 0.5),
+                                Align2::LEFT_CENTER,
+                                title,
+                                FontId::proportional(12.5),
+                                ink,
+                            );
+                            // Switch: the track fills with the "on pace" color, the knob slides.
+                            let sw = Rect::from_center_size(
+                                pos2(r.right() - 22.0, r.center().y),
+                                vec2(26.0, 14.0),
+                            );
+                            p.rect_filled(
+                                sw,
+                                CornerRadius::same(7),
+                                lerp_color(pal.track, pal.ok, on).gamma_multiply(shown),
+                            );
+                            let kx = egui::lerp(sw.left() + 7.0..=sw.right() - 7.0, on);
+                            p.circle_filled(
+                                pos2(kx, sw.center().y),
+                                5.0,
+                                lerp_color(pal.faint, Color32::WHITE, on).gamma_multiply(shown),
+                            );
+                            if resp.clicked() {
+                                toggled = Some(key.clone());
+                            }
+                        }
+                    }
+                    (chosen, toggled)
                 });
-            match area.inner {
+            let (chosen, toggled) = area.inner;
+            act.toggle_card = toggled;
+            match chosen {
                 Some(Item::Lang) => act.toggle_lang = true,
                 Some(Item::Theme) => act.cycle_theme = true,
                 Some(Item::GitHub) => {
@@ -383,7 +501,10 @@ impl Dashboard {
 
         let full = ui.max_rect();
         let merged = crate::model::merge_claude(f.accounts);
-        let mut cards: Vec<&Account> = merged.iter().collect();
+        let mut cards: Vec<&Account> = merged
+            .iter()
+            .filter(|a| !f.hidden.contains(&a.key))
+            .collect();
         cards.sort_by(|a, b| {
             a.title()
                 .to_lowercase()
@@ -432,20 +553,71 @@ impl Dashboard {
             .show(&mut child, |ui| {
                 let (area, _) = ui
                     .allocate_exact_size(vec2(full.width(), total_h + outer * 0.6), Sense::hover());
+                // Cards that went away (hidden, or no longer available) fade out where they were.
+                let gone: Vec<String> = self
+                    .last
+                    .keys()
+                    .filter(|k| !cards.iter().any(|a| &a.key == *k))
+                    .cloned()
+                    .collect();
+                for k in gone {
+                    if let Some((acc, rect, show)) = self.last.remove(&k) {
+                        self.leaving.push((acc, rect, show, now));
+                    }
+                    self.born.remove(&k);
+                }
+                self.leaving.retain(|l| now - l.3 < LEAVE);
+                for (acc, rect, show, at) in std::mem::take(&mut self.leaving) {
+                    let fade = 1.0 - ease_out_cubic(((now - at) / LEAVE) as f32);
+                    self.tweens.active = true;
+                    self.card(ui, pal, &f, &acc, rect, &m, 0, fade, now, show);
+                    self.leaving.push((acc, rect, show, at));
+                }
+
                 let mut idx = 0;
                 for (r, &(y, h)) in rows.iter().enumerate() {
                     let row_cards = &cards[r * cols..((r + 1) * cols).min(cards.len())];
                     // An incomplete last row stays aligned to the left, on the same columns.
                     for (c, acc) in row_cards.iter().enumerate() {
-                        let rect = Rect::from_min_size(
+                        let target = Rect::from_min_size(
                             pos2(left + c as f32 * (card_w + m.gap), area.top() + y),
                             vec2(card_w, h),
                         );
+                        // Cards glide to a new place when others are hidden or shown.
+                        let mut glide = |what: &str, v: f32| {
+                            self.tweens
+                                .get(&format!("{what}:{}", acc.key), v, v, now, 0.3, 0.0)
+                        };
+                        let rect = Rect::from_min_size(
+                            pos2(glide("x", target.left()), glide("y", target.top())),
+                            vec2(glide("w", target.width()), glide("h", target.height())),
+                        );
+                        let born = *self.born.entry(acc.key.clone()).or_insert(now);
+                        let appear = if born - start < 0.1 {
+                            // First frames: the cards come in one after another.
+                            ease_out_cubic((since - idx as f32 * 0.03) / 0.25)
+                        } else {
+                            ease_out_cubic(((now - born) / 0.25) as f32)
+                        };
                         let show_account =
                             per_provider.get(&acc.provider).copied().unwrap_or(0) > 1;
-                        self.card(ui, pal, &f, acc, rect, &m, idx, since, now, show_account);
+                        self.card(ui, pal, &f, acc, rect, &m, idx, appear, now, show_account);
+                        self.last
+                            .insert(acc.key.clone(), ((*acc).clone(), target, show_account));
                         idx += 1;
                     }
+                }
+                if cards.is_empty() && !merged.is_empty() {
+                    ui.painter().text(
+                        full.center(),
+                        Align2::CENTER_CENTER,
+                        f.lang.t(
+                            "Todos os cartões estão ocultos. Mostre-os pelo menu.",
+                            "Every card is hidden. Show them from the menu.",
+                        ),
+                        FontId::proportional(13.0),
+                        pal.faint,
+                    );
                 }
             });
 
@@ -505,12 +677,11 @@ impl Dashboard {
         rect: Rect,
         m: &Metrics,
         idx: usize,
-        since: f32,
+        appear: f32,
         now: f64,
         show_account: bool,
     ) {
         let lang = f.lang;
-        let appear = ease_out_cubic((since - idx as f32 * 0.03) / 0.25);
         if appear < 1.0 {
             self.tweens.active = true;
         }
@@ -720,6 +891,8 @@ impl Dashboard {
             ui.ctx()
                 .animate_bool_with_time(ui.scope_id().with((id, "h")), resp.hovered(), 0.15);
         let label = lang.data(&w.label);
+        // An untouched window has no running timer: no countdown, no pace marker.
+        let idle = w.idle(c.now_utc);
 
         let line_y = row.top() + 9.0;
         p.text(
@@ -741,7 +914,7 @@ impl Dashboard {
             pct_g,
             pal.text,
         );
-        if let Some(at) = w.resets_at {
+        if let Some(at) = w.resets_at.filter(|_| !idle) {
             let left = (at - c.now_utc).num_seconds();
             p.text(
                 pos2(row.right() - pct_w - 10.0, line_y + 0.5),
@@ -765,7 +938,7 @@ impl Dashboard {
             p.rect_filled(fill, 3.0, color.gamma_multiply(a));
         }
         // Pace marker: where the fill would be at an even pace.
-        if let Some(t) = w.time_left_fraction(c.now_utc) {
+        if let Some(t) = w.time_left_fraction(c.now_utc).filter(|_| !idle) {
             // Drawn straight from the clock: it moves too slowly to need a tween, and a tween
             // restarted every second would keep the window repainting.
             let tv = t;
@@ -800,7 +973,7 @@ impl Dashboard {
             });
         }
 
-        if w.resets_at.is_some() || pace_text(w, c.now_utc, lang).is_some() {
+        if !idle && (w.resets_at.is_some() || pace_text(w, c.now_utc, lang).is_some()) {
             resp.on_hover_ui(|ui| {
                 if let Some(at) = w.resets_at {
                     ui.label(format!(

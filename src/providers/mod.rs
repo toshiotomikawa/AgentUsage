@@ -86,6 +86,9 @@ pub(crate) fn read_small(path: &Path) -> Option<String> {
     (s.len() as u64 <= MAX_FILE).then_some(s)
 }
 
+/// The account has no active subscription: its card is hidden, not shown as "no data".
+pub(crate) const INACTIVE: &str = "assinatura inativa";
+
 /// A failure that says nothing about whether the account exists (rate limit, network, server).
 pub(crate) fn is_transient(err: &str) -> bool {
     err == status_error(429)
