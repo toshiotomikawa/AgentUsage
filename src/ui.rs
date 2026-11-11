@@ -546,8 +546,9 @@ impl Dashboard {
             total_h,
             avail_h,
         } = Grid::plan(&cards, full);
-        // The cards (with the button row above them) sit in the middle of the window.
-        let offset = ((avail_h - total_h) / 2.0).max(0.0);
+        // The cards sit halfway between the top of the window and its middle (the button row
+        // above them always fits).
+        let offset = (((avail_h - total_h) / 2.0 - BTN_GAP - CIRCLE) / 2.0).max(0.0);
         let at = pos2(
             self.tweens.get("btn:x", left + content_w, left + content_w, now, 0.3, 0.0),
             self.tweens.get("btn:y", grid_top + offset, grid_top + offset, now, 0.3, 0.0),
