@@ -6,7 +6,9 @@
 //! # Antigravity is read with `agy -p /usage` (no model turn). Set to false to skip it.
 //! antigravity = false
 //! # Seconds between automatic refreshes.
-//! refresh_secs = 60
+//! refresh_secs = 20
+//! # Local port of the read-only snapshot for the phone app (127.0.0.1 only). 0 turns it off.
+//! share_port = 47321
 //! ```
 
 use serde::Deserialize;
@@ -18,6 +20,7 @@ pub struct Config {
     pub claude_dirs: Vec<PathBuf>,
     pub antigravity: bool,
     pub refresh_secs: u64,
+    pub share_port: u16,
 }
 
 impl Default for Config {
@@ -25,7 +28,8 @@ impl Default for Config {
         Self {
             claude_dirs: Vec::new(),
             antigravity: true,
-            refresh_secs: 60,
+            refresh_secs: 20,
+            share_port: 47321,
         }
     }
 }

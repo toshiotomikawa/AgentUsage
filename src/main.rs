@@ -11,6 +11,7 @@ mod model;
 mod poller;
 mod prefs;
 mod providers;
+mod share;
 mod theme;
 mod ui;
 mod update;
@@ -86,11 +87,13 @@ impl App {
             Data::Demo(demo::accounts())
         } else {
             let sources = providers::discover(&cfg);
-            Data::Live(poller::Poller::start(
+            let poller = poller::Poller::start(
                 sources,
                 Duration::from_secs(refresh_every),
                 cc.egui_ctx.clone(),
-            ))
+            );
+            share::start(cfg.share_port, poller.shared.clone());
+            Data::Live(poller)
         };
         let mut prefs = Prefs::load();
         if let Some(t) = args.theme {
@@ -234,7 +237,29 @@ fn window_icon() -> egui::IconData {
     }
 }
 
+/// `--background`: no window, only the poller and the phone snapshot. A few MB instead of a
+/// GPU-backed window, meant for starting with Windows.
+fn run_background() {
+    let cfg = config::Config::load();
+    if cfg.share_port == 0 {
+        return;
+    }
+    let poller = poller::Poller::start(
+        providers::discover(&cfg),
+        Duration::from_secs(cfg.refresh_secs.max(15)),
+        egui::Context::default(),
+    );
+    share::start(cfg.share_port, poller.shared.clone());
+    loop {
+        std::thread::park();
+    }
+}
+
 fn main() -> eframe::Result {
+    if std::env::args().any(|a| a == "--background") {
+        run_background();
+        return Ok(());
+    }
     let mut args = parse_args();
     // Screenshots end up in docs and chats: they always use the fictional accounts.
     if args.screenshot.is_some() {

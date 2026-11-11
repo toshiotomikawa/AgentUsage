@@ -1,5 +1,5 @@
 //! OpenCode Go plan: `GET opencode.ai/zen/go/v1/usage` with the key the OpenCode CLI uses
-//! (Console key in `opencode.db`, `opencode-go` key in `auth.json`, or `OPENCODE_API_KEY`).
+//! (keys or Console login in `opencode.db`, keys in `auth.json`, or `OPENCODE_API_KEY`).
 
 use super::{Fetched, Source, agent, parse_time, read_json, status_error};
 use crate::model::{Group, Provider, Window};
@@ -31,54 +31,72 @@ fn data_dir() -> PathBuf {
         .join("opencode")
 }
 
-fn console_key(dir: &std::path::Path) -> Option<String> {
+/// Keys stored by the OpenCode CLI: API keys for `opencode-go` or `opencode`, and the access
+/// token of a Console login (OpenCode now stores that login as OAuth). Active ones first.
+fn db_keys(dir: &std::path::Path) -> Vec<String> {
     let db = dir.join("opencode.db");
     if !db.is_file() {
-        return None;
+        return Vec::new();
     }
-    let conn = rusqlite::Connection::open_with_flags(
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
         db,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .ok()?;
-    conn.busy_timeout(std::time::Duration::from_millis(150))
-        .ok()?;
-    let raw: String = conn
-        .query_row(
-            "SELECT value FROM credential WHERE integration_id = 'opencode' AND active IS NOT 0 \
-             ORDER BY active DESC, time_created DESC, id DESC LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
-        .ok()?;
-    let v: Value = serde_json::from_str(&raw).ok()?;
-    if v.get("type").and_then(Value::as_str) != Some("key") {
-        return None;
-    }
-    if let Some(server) = v.pointer("/metadata/server").and_then(Value::as_str)
-        && !server
-            .trim_end_matches('/')
-            .ends_with("opencode.ai/console")
-    {
-        return None;
-    }
-    v.get("key")
-        .and_then(Value::as_str)
+    ) else {
+        return Vec::new();
+    };
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(150));
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT value FROM credential WHERE integration_id IN ('opencode-go', 'opencode')          ORDER BY COALESCE(active, 0) DESC, integration_id = 'opencode-go' DESC,          time_created DESC, id DESC",
+    ) else {
+        return Vec::new();
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0));
+    let Ok(rows) = rows else { return Vec::new() };
+    rows.flatten()
+        .filter_map(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .filter_map(|v| {
+            if let Some(server) = v.pointer("/metadata/server").and_then(Value::as_str)
+                && !server
+                    .trim_end_matches('/')
+                    .ends_with("opencode.ai/console")
+            {
+                return None;
+            }
+            match v.get("type").and_then(Value::as_str) {
+                Some("key") => v.get("key").and_then(Value::as_str).map(str::to_string),
+                Some("oauth") => {
+                    let expired = v
+                        .get("expires")
+                        .and_then(Value::as_i64)
+                        .is_some_and(|e| e <= now_ms);
+                    if expired {
+                        None
+                    } else {
+                        v.get("access").and_then(Value::as_str).map(str::to_string)
+                    }
+                }
+                _ => None,
+            }
+        })
         .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn keys() -> Vec<String> {
     let dir = data_dir();
-    let mut keys = Vec::new();
-    if let Some(k) = console_key(&dir) {
-        keys.push(k);
-    }
-    let go = read_json(&dir.join("auth.json")).ok().and_then(|a| {
-        a.pointer("/opencode-go/key")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    });
-    if let Some(k) = go.or_else(|| std::env::var("OPENCODE_API_KEY").ok()) {
+    let mut keys = db_keys(&dir);
+    let auth = read_json(&dir.join("auth.json")).ok();
+    let from_auth = ["/opencode-go/key", "/opencode/key"]
+        .into_iter()
+        .filter_map(|p| {
+            auth.as_ref()
+                .and_then(|a| a.pointer(p))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    for k in from_auth.chain(std::env::var("OPENCODE_API_KEY").ok()) {
         let k = k.trim().to_string();
         if !k.is_empty() && !keys.contains(&k) {
             keys.push(k);
