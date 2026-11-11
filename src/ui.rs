@@ -56,6 +56,8 @@ pub struct Dashboard {
     last: HashMap<String, (Account, Rect, bool)>,
     /// Cards fading out: the card, its last place, whether its account showed, when it left.
     leaving: Vec<(Account, Rect, bool, f64)>,
+    /// Where the refresh and menu buttons end: the grid's top-right corner, from last frame.
+    buttons_at: Option<Pos2>,
 }
 
 /// Layout metrics, scaled by density so everything fits without scrolling.
@@ -86,6 +88,8 @@ const MIN_K: f32 = 0.6;
 /// Every circle (title bar buttons, provider icon discs, status rings) is this wide.
 const CIRCLE: f32 = 28.0;
 const BTN_R: f32 = CIRCLE / 2.0;
+/// Space between the refresh and menu buttons and the cards below them.
+const BTN_GAP: f32 = 12.0;
 /// Concentric status rings: stroke width and radii (outer hours, middle week, inner month).
 /// The outer edge of the outer ring is exactly `CIRCLE` wide.
 const RING_W: f32 = 2.0;
@@ -119,6 +123,7 @@ impl Dashboard {
             born: HashMap::new(),
             last: HashMap::new(),
             leaving: Vec::new(),
+            buttons_at: None,
         }
     }
 
@@ -167,8 +172,11 @@ impl Dashboard {
         let now = ui.input(|i| i.time);
         let lang = f.lang;
         let p = ui.painter().clone();
-        let cy = bar.center().y;
-        let menu_c = pos2(right - 10.0 - BTN_R, cy);
+        // The buttons sit just above the cards' top-right corner, not in the title bar.
+        let menu_c = match self.buttons_at {
+            Some(at) => pos2(at.x - BTN_R, at.y - BTN_GAP - BTN_R),
+            None => pos2(right - 10.0 - BTN_R, bar.center().y),
+        };
         let refresh_c = menu_c - vec2(CIRCLE + 8.0, 0.0);
 
         // Refresh: one eased turn, then a brief check mark once the data is in.
@@ -243,7 +251,7 @@ impl Dashboard {
             SECTION_H + ITEM_H * cards.len() as f32
         };
         let menu_rect = Rect::from_min_size(
-            pos2(menu_c.x + BTN_R - MENU_W, bar.bottom() + 4.0),
+            pos2(menu_c.x + BTN_R - MENU_W, menu_c.y + BTN_R + 6.0),
             vec2(MENU_W, ITEM_H * 4.0 + cards_h + MENU_PAD * 2.0),
         );
         let fade = ((now - self.menu_at) / MENU_FADE).min(1.0) as f32;
@@ -536,8 +544,18 @@ impl Dashboard {
             m,
             rows,
             total_h,
-            ..
+            avail_h,
         } = Grid::plan(&cards, full);
+        // The cards (with the button row above them) sit in the middle of the window.
+        let offset = ((avail_h - total_h) / 2.0).max(0.0);
+        let at = pos2(
+            self.tweens.get("btn:x", left + content_w, left + content_w, now, 0.3, 0.0),
+            self.tweens.get("btn:y", grid_top + offset, grid_top + offset, now, 0.3, 0.0),
+        );
+        if self.buttons_at != Some(at) {
+            self.buttons_at = Some(at);
+            ui.ctx().request_repaint();
+        }
 
         // ---------- grid ----------
         let mut per_provider: HashMap<_, usize> = HashMap::new();
@@ -552,7 +570,7 @@ impl Dashboard {
             .auto_shrink([false, false])
             .show(&mut child, |ui| {
                 let (area, _) = ui
-                    .allocate_exact_size(vec2(full.width(), total_h + outer * 0.6), Sense::hover());
+                    .allocate_exact_size(vec2(full.width(), offset + total_h + outer * 0.6), Sense::hover());
                 // Cards that went away (hidden, or no longer available) fade out where they were.
                 let gone: Vec<String> = self
                     .last
@@ -580,7 +598,7 @@ impl Dashboard {
                     // An incomplete last row stays aligned to the left, on the same columns.
                     for (c, acc) in row_cards.iter().enumerate() {
                         let target = Rect::from_min_size(
-                            pos2(left + c as f32 * (card_w + m.gap), area.top() + y),
+                            pos2(left + c as f32 * (card_w + m.gap), area.top() + offset + y),
                             vec2(card_w, h),
                         );
                         // Cards glide to a new place when others are hidden or shown.
@@ -1035,7 +1053,8 @@ impl Grid {
         // The same margin above and below the grid.
         let compact = full.height() < 640.0;
         let margin = outer * if compact { 0.35 } else { 0.6 };
-        let grid_top = full.top() + margin;
+        // Room for the refresh and menu buttons above the cards.
+        let grid_top = full.top() + margin + BTN_GAP + CIRCLE;
         let avail_h = full.bottom() - grid_top - margin;
 
         let max_cols = if content_w >= 980.0 {
