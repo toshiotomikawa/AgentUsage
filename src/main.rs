@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod anim;
+mod cache;
 mod chrome;
 mod config;
 mod demo;

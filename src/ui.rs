@@ -550,8 +550,10 @@ impl Dashboard {
         // above them always fits).
         let offset = (((avail_h - total_h) / 2.0 - BTN_GAP - CIRCLE) / 2.0).max(0.0);
         let at = pos2(
-            self.tweens.get("btn:x", left + content_w, left + content_w, now, 0.3, 0.0),
-            self.tweens.get("btn:y", grid_top + offset, grid_top + offset, now, 0.3, 0.0),
+            self.tweens
+                .get("btn:x", left + content_w, left + content_w, now, 0.3, 0.0),
+            self.tweens
+                .get("btn:y", grid_top + offset, grid_top + offset, now, 0.3, 0.0),
         );
         if self.buttons_at != Some(at) {
             self.buttons_at = Some(at);
@@ -570,8 +572,10 @@ impl Dashboard {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(&mut child, |ui| {
-                let (area, _) = ui
-                    .allocate_exact_size(vec2(full.width(), offset + total_h + outer * 0.6), Sense::hover());
+                let (area, _) = ui.allocate_exact_size(
+                    vec2(full.width(), offset + total_h + outer * 0.6),
+                    Sense::hover(),
+                );
                 // Cards that went away (hidden, or no longer available) fade out where they were.
                 let gone: Vec<String> = self
                     .last

@@ -19,6 +19,7 @@ pub fn source() -> Source {
         fetch: Arc::new(fetch),
         min_interval: None,
         optional: false,
+        remember: false,
         account: None,
     }
 }

@@ -27,13 +27,21 @@ impl Poller {
     pub fn start(sources: Vec<Source>, every: Duration, ctx: eframe::egui::Context) -> Self {
         let accounts = sources
             .iter()
-            .map(|s| Account {
-                key: s.key.clone(),
-                provider: s.provider,
-                title: None,
-                account: s.account.clone(),
-                reading: Reading::Loading,
-                fetched_at: None,
+            .map(|s| {
+                // A slow source starts from its last saved reading until the fresh one lands.
+                let saved = s.remember.then(|| crate::cache::load(&s.key)).flatten();
+                let (reading, fetched_at) = match saved {
+                    Some((groups, at)) => (Reading::Ok(groups), Some(at)),
+                    None => (Reading::Loading, None),
+                };
+                Account {
+                    key: s.key.clone(),
+                    provider: s.provider,
+                    title: None,
+                    account: s.account.clone(),
+                    reading,
+                    fetched_at,
+                }
             })
             .collect();
         let shared = Arc::new(Mutex::new(Shared {
@@ -119,6 +127,11 @@ fn spawn_fetch(src: Source, shared: Arc<Mutex<Shared>>, ctx: eframe::egui::Conte
                 let result =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (src.fetch)()))
                         .unwrap_or_else(|_| Err("resposta inesperada".into()));
+                if src.remember
+                    && let Ok(f) = &result
+                {
+                    crate::cache::save(&src.key, &f.groups);
+                }
                 let mut s = shared.lock().unwrap();
                 s.fetching.remove(&src.key);
                 s.in_flight = s.in_flight.saturating_sub(1);
@@ -190,6 +203,7 @@ mod tests {
             fetch: Arc::new(|| Err("x".into())),
             min_interval: None,
             optional,
+            remember: false,
             account: Some("~/.claude".into()),
         }
     }

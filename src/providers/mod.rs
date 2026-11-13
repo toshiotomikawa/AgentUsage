@@ -35,6 +35,8 @@ pub struct Source {
     pub min_interval: Option<u64>,
     /// Auto-discovered extra account: hidden instead of shown as "no data" when it cannot be read.
     pub optional: bool,
+    /// Slow source: its last good reading is kept on disk and shown at once on the next launch.
+    pub remember: bool,
     /// Account label known before any fetch (shown even when the fetch fails).
     pub account: Option<String>,
 }

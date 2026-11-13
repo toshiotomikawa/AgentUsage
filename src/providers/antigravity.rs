@@ -22,6 +22,8 @@ pub fn source() -> Source {
         fetch: Arc::new(fetch),
         min_interval: None,
         optional: false,
+        // agy takes a few seconds to answer: show its last reading at once on launch.
+        remember: true,
         account: None,
     }
 }

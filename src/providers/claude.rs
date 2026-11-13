@@ -82,6 +82,7 @@ pub fn sources(cfg: &Config) -> Vec<Source> {
                 // rarely. Its numbers move slowly, so a few minutes between reads loses nothing.
                 min_interval: Some(MIN_INTERVAL_SECS),
                 optional,
+                remember: false,
                 account,
             }
         })
