@@ -79,9 +79,9 @@ struct App {
     demo_since: f64,
     first_frame: Option<f64>,
     updates: update::Checker,
-    /// The tray menu's end item (relabelled when the language changes); None without a tray.
+    /// The tray menu; None without a tray icon.
     #[cfg(windows)]
-    tray_end: Option<tray_icon::menu::MenuItem>,
+    tray: Option<tray::TrayMenu>,
 }
 
 impl App {
@@ -109,8 +109,8 @@ impl App {
             prefs.lang = l;
         }
         #[cfg(windows)]
-        let tray_end = if args.screenshot.is_none() {
-            tray::install(cc, end_label(prefs.lang))
+        let tray = if args.screenshot.is_none() {
+            tray::install(cc, prefs.lang)
         } else {
             None
         };
@@ -125,13 +125,9 @@ impl App {
             first_frame: None,
             updates: update::Checker::new(),
             #[cfg(windows)]
-            tray_end,
+            tray,
         }
     }
-}
-
-fn end_label(lang: i18n::Lang) -> &'static str {
-    lang.t("Encerrar.", "End.")
 }
 
 impl eframe::App for App {
@@ -157,7 +153,7 @@ impl eframe::App for App {
 
         // Closing hides the window in the tray; the tray menu ends the app.
         #[cfg(windows)]
-        if self.tray_end.is_some() && ctx.input(|i| i.viewport().close_requested()) {
+        if self.tray.is_some() && ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             tray::hide();
         }
@@ -220,8 +216,8 @@ impl eframe::App for App {
             if act.toggle_lang {
                 self.prefs.lang = self.prefs.lang.toggled();
                 #[cfg(windows)]
-                if let Some(end) = &self.tray_end {
-                    end.set_text(end_label(self.prefs.lang));
+                if let Some(t) = &self.tray {
+                    t.relabel(self.prefs.lang);
                 }
             }
             self.prefs.save();

@@ -77,6 +77,19 @@ fn run(
             s.last_refresh = Some(Utc::now());
         }
         for src in &sources {
+            // A reading is a shared fact: take a fresher one another copy of the app saved, or
+            // one a sibling folder signed in to the same account made, before asking the vendor.
+            {
+                let mut s = shared.lock().unwrap();
+                if src.remember && !s.fetching.contains(&src.key) {
+                    adopt_saved(&mut s, src);
+                }
+                adopt_twin(&mut s, src);
+            }
+            // A twin folder already asking for the same account answers for this one too.
+            if twin_fetching(&shared.lock().unwrap(), src) {
+                continue;
+            }
             // A manual refresh skips the minimum interval for accounts still without data
             // (e.g. right after signing in again); the providers' own backoff still applies.
             let has_data = || {
@@ -98,8 +111,22 @@ fn run(
                     .iter()
                     .any(|a| a.key == src.key && just_reset(a, now))
             };
-            if let (Some(min), Some(at)) = (src.min_interval, last_run.get(&src.key))
-                && at.elapsed() < Duration::from_secs(min)
+            // Fresh: tried recently here, or read recently by anyone (this copy, another copy
+            // or a twin folder).
+            let fresh = |min: u64| {
+                let tried = last_run
+                    .get(&src.key)
+                    .is_some_and(|at| at.elapsed() < Duration::from_secs(min));
+                let read = shared.lock().unwrap().accounts.iter().any(|a| {
+                    a.key == src.key
+                        && matches!(a.reading, Reading::Ok(_))
+                        && a.fetched_at
+                            .is_some_and(|t| (Utc::now() - t).num_seconds() < min as i64)
+                });
+                tried || read
+            };
+            if let Some(min) = src.min_interval
+                && fresh(min)
                 && (!manual || has_data())
                 && !reset_passed()
             {
@@ -137,8 +164,81 @@ fn just_reset(a: &Account, now: chrono::DateTime<Utc>) -> bool {
         .any(|at| at <= now && fetched < at + chrono::Duration::seconds(RESET_GRACE_SECS))
 }
 
-/// Start one read of `src` unless one is already running. Returns whether it started.
+/// Longest a read may hold its lease before another copy assumes it died.
+const LEASE_TTL: Duration = Duration::from_secs(120);
+
+/// Take the reading another copy of the app saved for `src`, when it is newer than ours.
+fn adopt_saved(s: &mut Shared, src: &Source) {
+    let Some((groups, at, who)) = crate::cache::load(&src.key) else {
+        return;
+    };
+    let Some(acc) = s.accounts.iter_mut().find(|a| a.key == src.key) else {
+        return;
+    };
+    let ours_ok = matches!(acc.reading, Reading::Ok(_));
+    if !ours_ok || acc.fetched_at.is_none_or(|t| t < at) {
+        acc.reading = Reading::Ok(groups);
+        acc.fetched_at = Some(at);
+        if who.is_some() {
+            acc.account = who;
+        }
+    }
+}
+
+/// Folders signed in to the same account share one reading: take a twin's when it is newer, so
+/// only one of them asks the vendor.
+fn adopt_twin(s: &mut Shared, src: &Source) {
+    let Some(me) = s.accounts.iter().position(|a| a.key == src.key) else {
+        return;
+    };
+    let (name, provider, mine) = {
+        let a = &s.accounts[me];
+        (a.account.clone(), a.provider, a.fetched_at)
+    };
+    let Some(name) = name else { return };
+    let twin = s
+        .accounts
+        .iter()
+        .filter(|a| a.key != src.key && a.provider == provider)
+        .filter(|a| a.account.as_deref() == Some(name.as_str()))
+        .filter(|a| matches!(a.reading, Reading::Ok(_)))
+        .filter(|a| a.fetched_at.is_some_and(|t| mine.is_none_or(|m| m < t)))
+        .max_by_key(|a| a.fetched_at)
+        .map(|a| (a.reading.clone(), a.fetched_at));
+    if let Some((reading, at)) = twin {
+        let acc = &mut s.accounts[me];
+        acc.reading = reading;
+        acc.fetched_at = at;
+    }
+}
+
+/// Whether another folder signed in to the same account is being read right now.
+fn twin_fetching(s: &Shared, src: &Source) -> bool {
+    let Some(me) = s.accounts.iter().find(|a| a.key == src.key) else {
+        return false;
+    };
+    let Some(name) = &me.account else {
+        return false;
+    };
+    s.accounts.iter().any(|a| {
+        a.key != src.key
+            && a.provider == me.provider
+            && a.account.as_ref() == Some(name)
+            && s.fetching.contains(&a.key)
+    })
+}
+
+/// Start one read of `src` unless one is already running here or in another copy of the app.
+/// Returns whether it started.
 fn spawn_fetch(src: Source, shared: Arc<Mutex<Shared>>, ctx: eframe::egui::Context) -> bool {
+    let lease = if src.remember {
+        match crate::cache::lease(&src.key, LEASE_TTL) {
+            Some(l) => Some(l),
+            None => return false,
+        }
+    } else {
+        None
+    };
     {
         let mut s = shared.lock().unwrap();
         if !s.fetching.insert(src.key.clone()) {
@@ -160,6 +260,7 @@ fn spawn_fetch(src: Source, shared: Arc<Mutex<Shared>>, ctx: eframe::egui::Conte
                 {
                     crate::cache::save(&src.key, &f.groups, f.account.as_deref());
                 }
+                drop(lease);
                 let mut s = shared.lock().unwrap();
                 s.fetching.remove(&src.key);
                 s.in_flight = s.in_flight.saturating_sub(1);

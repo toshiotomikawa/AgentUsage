@@ -1,5 +1,5 @@
-//! Tray icon (Windows): minimize and close hide the window in the tray, one click on the icon
-//! shows or hides it again, and its menu ends the app. Launching a second copy brings the open
+//! Tray icon (Windows): closing hides the window in the tray, one click on the icon shows or
+//! hides it again, and its menu opens or ends the app. Launching a second copy brings the open
 //! window forward instead.
 
 use eframe::egui;
@@ -23,8 +23,21 @@ thread_local! {
     static ICON: std::cell::RefCell<Option<TrayIcon>> = const { std::cell::RefCell::new(None) };
 }
 
+/// The tray menu's items, relabelled when the app's language changes.
+pub struct TrayMenu {
+    open: MenuItem,
+    end: MenuItem,
+}
+
+impl TrayMenu {
+    pub fn relabel(&self, lang: crate::i18n::Lang) {
+        self.open.set_text(lang.t("Abrir", "Open"));
+        self.end.set_text(lang.t("Encerrar", "End"));
+    }
+}
+
 /// Create the tray icon for the window behind `cc`. Runs on the main thread.
-pub fn install(cc: &eframe::CreationContext<'_>, end_label: &str) -> Option<MenuItem> {
+pub fn install(cc: &eframe::CreationContext<'_>, lang: crate::i18n::Lang) -> Option<TrayMenu> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let RawWindowHandle::Win32(h) = cc.window_handle().ok()?.as_raw() else {
         return None;
@@ -32,9 +45,14 @@ pub fn install(cc: &eframe::CreationContext<'_>, end_label: &str) -> Option<Menu
     HWND_.store(h.hwnd.get(), Ordering::Relaxed);
     let _ = CTX.set(cc.egui_ctx.clone());
 
-    let end = MenuItem::new(end_label, true, None);
+    let items = TrayMenu {
+        open: MenuItem::new("", true, None),
+        end: MenuItem::new("", true, None),
+    };
+    items.relabel(lang);
     let menu = Menu::new();
-    menu.append(&end).ok()?;
+    menu.append(&items.open).ok()?;
+    menu.append(&items.end).ok()?;
     let rgba = image::load_from_memory(crate::icons::APP_ICON)
         .ok()?
         .resize(32, 32, image::imageops::FilterType::Lanczos3)
@@ -59,13 +77,17 @@ pub fn install(cc: &eframe::CreationContext<'_>, end_label: &str) -> Option<Menu
             toggle();
         }
     }));
-    let end_id = end.id().clone();
+    let (open_id, end_id) = (items.open.id().clone(), items.end.id().clone());
     MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
-        if e.id == end_id {
+        if e.id == open_id
+            && let Some(h) = hwnd()
+        {
+            show(h);
+        } else if e.id == end_id {
             quit();
         }
     }));
-    Some(end)
+    Some(items)
 }
 
 fn hwnd() -> Option<HWND> {
@@ -73,11 +95,11 @@ fn hwnd() -> Option<HWND> {
     (h != 0).then_some(h as HWND)
 }
 
-/// Hide the window in the tray. False when there is no tray icon (the window stays as it is).
-pub fn hide() -> bool {
-    let Some(h) = hwnd() else { return false };
-    unsafe { ShowWindow(h, SW_HIDE) };
-    true
+/// Hide the window in the tray.
+pub fn hide() {
+    if let Some(h) = hwnd() {
+        unsafe { ShowWindow(h, SW_HIDE) };
+    }
 }
 
 fn show(h: HWND) {

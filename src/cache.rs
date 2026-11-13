@@ -1,14 +1,14 @@
 //! Last good reading of slow sources (`Source::remember`), kept in
-//! `<local data dir>/agent-usage/cache/<key>.json` so their card shows at once on launch while
-//! the fresh read runs. Only percentages, reset times, labels and the account name are stored.
+//! `<local data dir>/agent-usage/cache/<key>.json`. Every copy of the app (the window and the
+//! background one) reads it: the card shows at once on launch, and a reading one copy made is
+//! reused by the others instead of asking the vendor again. A lease file lets only one copy
+//! read a source at a time. Only percentages, reset times, labels and the account name are stored.
 
 use crate::model::{Group, Window};
 use crate::providers::{parse_time, read_small};
 use chrono::{DateTime, Duration as D, Utc};
 use serde_json::{Value, json};
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::time::Duration;
 
 /// Older readings are not worth showing, even for a few seconds.
@@ -35,19 +35,10 @@ pub fn load(key: &str) -> Option<Saved> {
 /// A saved reading: groups, when it was read, and the account it belongs to.
 pub type Saved = (Vec<Group>, DateTime<Utc>, Option<String>);
 
-/// Save `groups` for `key`, skipping the write when nothing changed since the last one.
+/// Save `groups` for `key`. Written even when unchanged: the time it was read is what tells the
+/// other copies the reading is fresh.
 pub fn save(key: &str, groups: &[Group], account: Option<&str>) {
-    static LAST: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
     let body = encode(groups, account, Utc::now());
-    let groups_only = format!("{}{:?}", body["groups"], account);
-    {
-        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
-        let last = last.get_or_insert_with(HashMap::new);
-        if last.get(key) == Some(&groups_only) {
-            return;
-        }
-        last.insert(key.to_string(), groups_only);
-    }
     let Some(path) = path(key) else { return };
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -57,6 +48,46 @@ pub fn save(key: &str, groups: &[Group], account: Option<&str>) {
     if std::fs::write(&tmp, body.to_string()).is_ok() && std::fs::rename(&tmp, &path).is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
+}
+
+/// The right to read a source; the lease file goes away when this is dropped.
+pub struct Lease(Option<PathBuf>);
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        if let Some(p) = &self.0 {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// Take the lease on `key`, unless another copy holds it. A lease older than `ttl` belongs to a
+/// copy that died mid-read and is taken over. Without a data folder there is nothing to share.
+pub fn lease(key: &str, ttl: Duration) -> Option<Lease> {
+    let Some(p) = path(key).map(|p| p.with_extension("lease")) else {
+        return Some(Lease(None));
+    };
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    for _ in 0..2 {
+        let opened = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&p);
+        if opened.is_ok() {
+            return Some(Lease(Some(p)));
+        }
+        let age = std::fs::metadata(&p)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok());
+        if age.is_some_and(|a| a < ttl) {
+            return None;
+        }
+        let _ = std::fs::remove_file(&p);
+    }
+    None
 }
 
 fn encode(groups: &[Group], account: Option<&str>, now: DateTime<Utc>) -> Value {
@@ -131,6 +162,18 @@ mod tests {
         assert!((g[0].windows[0].remaining - 0.67).abs() < 1e-4);
         assert_eq!(g[0].windows[0].length, Some(Duration::from_secs(300 * 60)));
         assert_eq!(saved.timestamp(), now.timestamp());
+    }
+
+    #[test]
+    fn one_lease_at_a_time() {
+        let key = format!("test-lease-{}", std::process::id());
+        let first = lease(&key, Duration::from_secs(60)).unwrap();
+        assert!(lease(&key, Duration::from_secs(60)).is_none());
+        // A lease older than its lifetime is taken over.
+        let second = lease(&key, Duration::ZERO).unwrap();
+        std::mem::forget(first);
+        drop(second);
+        assert!(lease(&key, Duration::from_secs(60)).is_some());
     }
 
     #[test]
