@@ -1,6 +1,6 @@
 //! Last good reading of slow sources (`Source::remember`), kept in
 //! `<local data dir>/agent-usage/cache/<key>.json` so their card shows at once on launch while
-//! the fresh read runs. Only percentages, reset times and labels are stored.
+//! the fresh read runs. Only percentages, reset times, labels and the account name are stored.
 
 use crate::model::{Group, Window};
 use crate::providers::{parse_time, read_small};
@@ -27,16 +27,19 @@ fn path(key: &str) -> Option<PathBuf> {
 }
 
 /// Saved reading of `key`, unless it is too old or a window has reset since (stale numbers).
-pub fn load(key: &str) -> Option<(Vec<Group>, DateTime<Utc>)> {
+pub fn load(key: &str) -> Option<Saved> {
     let text = read_small(&path(key)?)?;
     decode(&serde_json::from_str(&text).ok()?, Utc::now())
 }
 
+/// A saved reading: groups, when it was read, and the account it belongs to.
+pub type Saved = (Vec<Group>, DateTime<Utc>, Option<String>);
+
 /// Save `groups` for `key`, skipping the write when nothing changed since the last one.
-pub fn save(key: &str, groups: &[Group]) {
+pub fn save(key: &str, groups: &[Group], account: Option<&str>) {
     static LAST: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
-    let body = encode(groups, Utc::now());
-    let groups_only = body["groups"].to_string();
+    let body = encode(groups, account, Utc::now());
+    let groups_only = format!("{}{:?}", body["groups"], account);
     {
         let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
         let last = last.get_or_insert_with(HashMap::new);
@@ -56,9 +59,10 @@ pub fn save(key: &str, groups: &[Group]) {
     }
 }
 
-fn encode(groups: &[Group], now: DateTime<Utc>) -> Value {
+fn encode(groups: &[Group], account: Option<&str>, now: DateTime<Utc>) -> Value {
     json!({
         "saved_at": now.to_rfc3339(),
+        "account": account,
         "groups": groups.iter().map(|g| json!({
             "name": g.name,
             "windows": g.windows.iter().map(|w| json!({
@@ -71,7 +75,7 @@ fn encode(groups: &[Group], now: DateTime<Utc>) -> Value {
     })
 }
 
-fn decode(v: &Value, now: DateTime<Utc>) -> Option<(Vec<Group>, DateTime<Utc>)> {
+fn decode(v: &Value, now: DateTime<Utc>) -> Option<Saved> {
     let saved = parse_time(v.get("saved_at")?)?;
     if now - saved > D::hours(MAX_AGE_HOURS) || saved > now + D::minutes(5) {
         return None;
@@ -99,7 +103,8 @@ fn decode(v: &Value, now: DateTime<Utc>) -> Option<(Vec<Group>, DateTime<Utc>)> 
             windows,
         });
     }
-    (!groups.is_empty()).then_some((groups, saved))
+    let account = v.get("account").and_then(Value::as_str).map(str::to_string);
+    (!groups.is_empty()).then_some((groups, saved, account))
 }
 
 #[cfg(test)]
@@ -120,7 +125,8 @@ mod tests {
     #[test]
     fn round_trip() {
         let now = Utc::now();
-        let (g, saved) = decode(&encode(&groups(now), now), now).unwrap();
+        let (g, saved, account) = decode(&encode(&groups(now), Some("ana"), now), now).unwrap();
+        assert_eq!(account.as_deref(), Some("ana"));
         assert_eq!(g[0].name, "Gemini");
         assert!((g[0].windows[0].remaining - 0.67).abs() < 1e-4);
         assert_eq!(g[0].windows[0].length, Some(Duration::from_secs(300 * 60)));
@@ -130,7 +136,7 @@ mod tests {
     #[test]
     fn stale_readings_are_dropped() {
         let now = Utc::now();
-        let v = encode(&groups(now), now);
+        let v = encode(&groups(now), None, now);
         // Too old.
         assert!(decode(&v, now + D::hours(13)).is_none());
         // A window reset since it was saved.

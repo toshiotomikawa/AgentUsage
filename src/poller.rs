@@ -30,15 +30,15 @@ impl Poller {
             .map(|s| {
                 // A slow source starts from its last saved reading until the fresh one lands.
                 let saved = s.remember.then(|| crate::cache::load(&s.key)).flatten();
-                let (reading, fetched_at) = match saved {
-                    Some((groups, at)) => (Reading::Ok(groups), Some(at)),
-                    None => (Reading::Loading, None),
+                let (reading, fetched_at, account) = match saved {
+                    Some((groups, at, who)) => (Reading::Ok(groups), Some(at), who),
+                    None => (Reading::Loading, None, None),
                 };
                 Account {
                     key: s.key.clone(),
                     provider: s.provider,
                     title: None,
-                    account: s.account.clone(),
+                    account: account.or_else(|| s.account.clone()),
                     reading,
                     fetched_at,
                 }
@@ -123,7 +123,7 @@ fn run(
 
 /// How long after a reset the old reading still counts as stale: the vendor may take a few
 /// seconds to report the new window, so a read that lands too early gets more tries.
-const RESET_GRACE_SECS: i64 = 90;
+const RESET_GRACE_SECS: i64 = 30;
 
 /// Whether one of the account's windows reset after its last reading, within the grace period.
 fn just_reset(a: &Account, now: chrono::DateTime<Utc>) -> bool {
@@ -158,7 +158,7 @@ fn spawn_fetch(src: Source, shared: Arc<Mutex<Shared>>, ctx: eframe::egui::Conte
                 if src.remember
                     && let Ok(f) = &result
                 {
-                    crate::cache::save(&src.key, &f.groups);
+                    crate::cache::save(&src.key, &f.groups, f.account.as_deref());
                 }
                 let mut s = shared.lock().unwrap();
                 s.fetching.remove(&src.key);

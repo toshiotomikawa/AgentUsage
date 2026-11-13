@@ -82,7 +82,9 @@ pub fn sources(cfg: &Config) -> Vec<Source> {
                 // rarely. Its numbers move slowly, so a few minutes between reads loses nothing.
                 min_interval: Some(MIN_INTERVAL_SECS),
                 optional,
-                remember: false,
+                // A window opened next to the background copy may be told to wait (429) on its
+                // first read; the saved reading keeps every account on screen meanwhile.
+                remember: true,
                 account,
             }
         })
