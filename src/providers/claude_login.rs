@@ -125,13 +125,17 @@ pub(super) fn renew(
     if let Some((old_refresh, new)) = pending
         && login.refresh.as_deref() == Some(old_refresh.as_str())
     {
-        if store(&path, &new).is_err() {
+        // The refresh token the file holds now: the new one once saved, else still the old one.
+        let in_file = if store(&path, &new).is_ok() {
+            new.refresh.clone().unwrap_or_default()
+        } else {
             state.lock().unwrap().pending = Some((old_refresh.clone(), new.clone()));
-        }
+            old_refresh
+        };
         if !near_expiry(&new) && refused != Some(new.token.as_str()) {
             return Ok(new);
         }
-        return renew_now(&path, new, &old_refresh, state);
+        return renew_now(&path, new, &in_file, state);
     }
 
     if !near_expiry(&login) && refused != Some(login.token.as_str()) {
