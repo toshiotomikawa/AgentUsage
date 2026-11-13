@@ -18,7 +18,9 @@ toml = { version = "1.2", default-features = false, features = ["parse", "serde"
 ureq = { version = "3.5.1", default-features = false, features = ["json", "rustls"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+raw-window-handle = "0.6"
+tray-icon = "0.26.1"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 lto = "thin"

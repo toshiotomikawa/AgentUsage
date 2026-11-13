@@ -14,6 +14,8 @@ mod prefs;
 mod providers;
 mod share;
 mod theme;
+#[cfg(windows)]
+mod tray;
 mod ui;
 mod update;
 
@@ -77,6 +79,9 @@ struct App {
     demo_since: f64,
     first_frame: Option<f64>,
     updates: update::Checker,
+    /// The tray menu's end item (relabelled when the language changes); None without a tray.
+    #[cfg(windows)]
+    tray_end: Option<tray_icon::menu::MenuItem>,
 }
 
 impl App {
@@ -103,6 +108,12 @@ impl App {
         if let Some(l) = args.lang {
             prefs.lang = l;
         }
+        #[cfg(windows)]
+        let tray_end = if args.screenshot.is_none() {
+            tray::install(cc, end_label(prefs.lang))
+        } else {
+            None
+        };
         Self {
             data,
             dash: ui::Dashboard::new(),
@@ -113,8 +124,14 @@ impl App {
             demo_since: 0.0,
             first_frame: None,
             updates: update::Checker::new(),
+            #[cfg(windows)]
+            tray_end,
         }
     }
+}
+
+fn end_label(lang: i18n::Lang) -> &'static str {
+    lang.t("Encerrar.", "End.")
 }
 
 impl eframe::App for App {
@@ -137,6 +154,13 @@ impl eframe::App for App {
         } else {
             egui::Theme::Light
         });
+
+        // Closing hides the window in the tray; the tray menu ends the app.
+        #[cfg(windows)]
+        if self.tray_end.is_some() && ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            tray::hide();
+        }
 
         let key_refresh = ctx.input(|i| {
             i.key_pressed(egui::Key::F5) || (i.modifiers.command && i.key_pressed(egui::Key::R))
@@ -195,6 +219,10 @@ impl eframe::App for App {
             }
             if act.toggle_lang {
                 self.prefs.lang = self.prefs.lang.toggled();
+                #[cfg(windows)]
+                if let Some(end) = &self.tray_end {
+                    end.set_text(end_label(self.prefs.lang));
+                }
             }
             self.prefs.save();
             ctx.request_repaint();
@@ -270,6 +298,11 @@ fn main() -> eframe::Result {
     // Screenshots end up in docs and chats: they always use the fictional accounts.
     if args.screenshot.is_some() {
         args.demo = true;
+    }
+    // Opening the app again (e.g. from its shortcut) brings the open window forward.
+    #[cfg(windows)]
+    if args.screenshot.is_none() && tray::focus_running() {
+        return Ok(());
     }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

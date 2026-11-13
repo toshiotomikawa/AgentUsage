@@ -112,6 +112,9 @@ pub fn title_bar(
         };
         let clicked = resp.clicked();
         resp.on_hover_text(tip);
+        // With a tray icon, minimizing hides the window in the tray instead of the taskbar.
+        #[cfg(windows)]
+        let clicked = clicked && !(matches!(kind, Btn::Min) && crate::tray::hide());
         if clicked {
             let cmd = match kind {
                 Btn::Close => ViewportCommand::Close,
