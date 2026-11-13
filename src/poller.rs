@@ -87,9 +87,21 @@ fn run(
                     .iter()
                     .any(|a| a.key == src.key && matches!(a.reading, Reading::Ok(_)))
             };
+            // A window whose reset time has just passed is read again at once, instead of
+            // showing the old numbers until the minimum interval runs out.
+            let reset_passed = || {
+                let now = Utc::now();
+                shared
+                    .lock()
+                    .unwrap()
+                    .accounts
+                    .iter()
+                    .any(|a| a.key == src.key && just_reset(a, now))
+            };
             if let (Some(min), Some(at)) = (src.min_interval, last_run.get(&src.key))
                 && at.elapsed() < Duration::from_secs(min)
                 && (!manual || has_data())
+                && !reset_passed()
             {
                 continue;
             }
@@ -107,6 +119,22 @@ fn run(
         // Collapse a burst of clicks into one refresh.
         while rx.try_recv().is_ok() {}
     }
+}
+
+/// How long after a reset the old reading still counts as stale: the vendor may take a few
+/// seconds to report the new window, so a read that lands too early gets more tries.
+const RESET_GRACE_SECS: i64 = 90;
+
+/// Whether one of the account's windows reset after its last reading, within the grace period.
+fn just_reset(a: &Account, now: chrono::DateTime<Utc>) -> bool {
+    let (Reading::Ok(groups), Some(fetched)) = (&a.reading, a.fetched_at) else {
+        return false;
+    };
+    groups
+        .iter()
+        .flat_map(|g| &g.windows)
+        .filter_map(|w| w.resets_at)
+        .any(|at| at <= now && fetched < at + chrono::Duration::seconds(RESET_GRACE_SECS))
 }
 
 /// Start one read of `src` unless one is already running. Returns whether it started.
@@ -246,6 +274,29 @@ mod tests {
         );
         assert!(matches!(s.accounts[0].reading, Reading::Unavailable(_)));
         assert_eq!(s.accounts[0].account.as_deref(), Some("~/.claude"));
+    }
+
+    #[test]
+    fn passed_reset_counts_as_stale_for_a_while() {
+        let now = Utc::now();
+        let d = chrono::Duration::seconds;
+        let acc = |fetched, resets| Account {
+            key: "k".into(),
+            provider: Provider::Claude,
+            title: None,
+            account: None,
+            reading: Reading::Ok(vec![Group {
+                name: String::new(),
+                windows: vec![Window::new("5 horas", 0.2).resets(Some(resets))],
+            }]),
+            fetched_at: Some(fetched),
+        };
+        // Read before the reset, reset now behind us: stale.
+        assert!(just_reset(&acc(now - d(300), now - d(10)), now));
+        // Reset still ahead: fresh.
+        assert!(!just_reset(&acc(now - d(300), now + d(10)), now));
+        // Read well after the reset (the vendor kept the old window): stop retrying.
+        assert!(!just_reset(&acc(now - d(5), now - d(200)), now));
     }
 
     #[test]
