@@ -1,75 +1,81 @@
 # AgentUsage
 
-Painel de desktop, escrito em Rust, que mostra em tempo real quanto ainda resta da cota de cada
-agente de IA: Antigravity, Claude (várias contas), Codex, Cursor & Grok e OpenCode Go.
+A desktop dashboard, written in Rust, that shows in real time how much quota each AI agent has
+left: Antigravity, Claude (several accounts), Codex, Cursor & Grok and OpenCode Go.
 
-![AgentUsage, tema claro](docs/demo-light.png)
+![AgentUsage, light theme](docs/demo-light.png)
 
-## Como ler
+## How to read it
 
-- **Uma linha por janela de cota** (5 horas, semanal, mensal…), sempre em **% restante**,
-  com o tempo até renovar ao lado.
-- **A cor indica o estado:** verde está no ritmo; âmbar pede atenção (pouca cota ou consumo acima do
-  ritmo); vinho fica crítica, abaixo de 10%; cinza está esgotada até renovar.
-- **Menu na barra de título:** idioma (PT-BR, EN-US), tema (sistema, claro, escuro), GitHub e
-  Atualizar, que procura uma versão nova nas releases do repositório. As escolhas ficam salvas.
-- **O risquinho na barra marca o ritmo:** (passe o mouse para ver o estado) é onde a barra estaria com um consumo uniforme até a
-  renovação. Barra à esquerda do risco quer dizer que você está gastando mais rápido que o tempo.
-- Os anéis no canto de cada cartão mostram, de fora para dentro, a janela de horas, a semanal e a mensal (a mais apertada de cada uma).
-- Todas as contas do Claude ficam num cartão só, uma seção por conta.
-- Os detalhes ficam escondidos e aparecem ao passar o mouse: data da renovação e previsão
-  ("acaba em 2h 10m").
-- Atualiza sozinho a cada 60 s; o Claude, a cada 5 min, e espera mais quando o serviço pede.
-  **F5** ou o botão de recarregar na barra de título pedem uma leitura nova dentro desses limites;
-  um sinal de visto confirma quando ela termina.
+- **One row per quota window** (5 hours, weekly, monthly…), always as **% remaining**, with the
+  time until it resets next to it.
+- **Color shows the state:** green is on pace; amber asks for attention (little quota left or
+  usage ahead of pace); wine is critical, below 10%; gray is exhausted until it resets.
+- **Title bar menu:** language (PT-BR, EN-US), theme (system, light, dark), which cards to show,
+  GitHub, and Update, which looks for a new version in the repository's releases. Choices are
+  saved.
+- **The tick on each bar marks the pace:** (hover to see the state) it is where the bar would be
+  with even usage until the reset. A bar left of the tick means you are spending faster than time
+  passes.
+- The rings in the corner of each card show, from outside in, the hours, weekly and monthly
+  windows (the tightest of each).
+- All Claude accounts share one card, one section per account.
+- Details stay hidden and appear on hover: the reset date and a forecast ("runs out in 2h 10m").
+- Refreshes on its own every 20 s; Claude every 5 min, waiting longer when the service asks.
+  **F5** or the reload button in the title bar ask for a fresh reading within those limits; a
+  check mark confirms when it finishes.
+- **Tray icon (Windows):** closing the window keeps the app in the tray. One click on the icon
+  shows or hides the window; its menu has Open and End. Opening the app again brings the open
+  window forward.
 
-![AgentUsage, tema escuro](docs/demo-dark.png)
+![AgentUsage, dark theme](docs/demo-dark.png)
 
-## De onde vêm os dados
+## Where the data comes from
 
-O app lê o login que cada CLI já guarda na sua máquina e consulta somente o serviço do próprio
-fornecedor. Os tokens vão só por HTTPS, sem redirecionamento, ao serviço do próprio fornecedor.
-Quando o login do Claude vence, o app o renova como o próprio Claude Code faz e o grava de volta
-no mesmo arquivo, sem precisar abrir o Claude Code.
+The app reads the login each CLI already keeps on your machine and queries only that vendor's own
+service. Tokens travel only over HTTPS, with no redirects, to the vendor's own service. When the
+Claude login expires, the app renews it the way Claude Code does and writes it back to the same
+file, without having to open Claude Code.
 
-| Agente | Login lido | Consulta |
+| Agent | Login read | Query |
 | --- | --- | --- |
-| Claude | `~/.claude/.credentials.json` (e `~/.claude-*`) | `api.anthropic.com/api/oauth/usage` |
+| Claude | `~/.claude/.credentials.json` (and `~/.claude-*`) | `api.anthropic.com/api/oauth/usage` |
 | Codex | `~/.codex/auth.json` | `chatgpt.com/backend-api/wham/usage` |
 | Cursor & Grok | `%APPDATA%/Cursor/auth.json` | `api2.cursor.sh` (DashboardService) |
 | OpenCode Go | `~/.local/share/opencode` | `opencode.ai/zen/go/v1/usage` |
-| Antigravity | sessão do `agy` | `agy -p /usage --output-format json` (sem gastar tokens) |
+| Antigravity | `agy` session | `agy -p /usage --output-format json` (spends no tokens) |
 
-## Configuração (opcional)
+## Configuration (optional)
 
-`%APPDATA%\agent-usage\config.toml` no Windows (`~/.config/agent-usage/config.toml` no Linux):
+`%APPDATA%\agent-usage\config.toml` on Windows (`~/.config/agent-usage/config.toml` on Linux):
 
 ```toml
-claude_dirs = ["C:/Users/voce/.claude-trabalho"]  # outras pastas de conta do Claude Code
-antigravity = false                                 # desliga a leitura do Antigravity
-refresh_secs = 60
+claude_dirs = ["C:/Users/you/.claude-work"]  # other Claude Code account folders
+antigravity = false                           # turns off the Antigravity reading
+refresh_secs = 20
 ```
 
-## Rodar
+## Run
 
 ```bash
 cargo run --release
 ```
 
-Para ver a interface com dados fictícios, sem login nenhum:
+To see the interface with fictional data, without any login:
 
 ```bash
 cargo run --release -- --demo
 ```
 
-## Instalar no Windows
+## Install on Windows
 
-Compila, copia o app para `%LOCALAPPDATA%\Programs\AgentUsage` e cria o atalho "AgentUsage" na Área de Trabalho e no Menu Iniciar. Rode de novo depois de atualizar o código.
+Builds the app, copies it to `%LOCALAPPDATA%\Programs\AgentUsage` and creates an "AgentUsage"
+shortcut on the Desktop and in the Start menu. Run it again after updating the code.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 ```
 
-## Licença
+## License
 
 MIT

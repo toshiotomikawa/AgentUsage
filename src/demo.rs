@@ -30,7 +30,7 @@ pub fn accounts() -> Vec<Account> {
             "claude-0",
             Provider::Claude,
             None,
-            Some("pessoal"),
+            Some("personal"),
             one(vec![
                 w("5 horas", 0.97, 282, 300),
                 w("Semanal", 0.81, 6 * 1440 + 360, 10_080),
@@ -40,7 +40,7 @@ pub fn accounts() -> Vec<Account> {
             "claude-1",
             Provider::Claude,
             None,
-            Some("trabalho"),
+            Some("work"),
             one(vec![
                 w("5 horas", 0.42, 150, 300),
                 w("Semanal", 0.18, 2 * 1440, 10_080),

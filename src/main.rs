@@ -108,6 +108,10 @@ impl App {
         if let Some(l) = args.lang {
             prefs.lang = l;
         }
+        // Screenshots show every card, whatever this machine hides.
+        if args.screenshot.is_some() {
+            prefs.hidden.clear();
+        }
         #[cfg(windows)]
         let tray = if args.screenshot.is_none() {
             tray::install(cc, prefs.lang)
