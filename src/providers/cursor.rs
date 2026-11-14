@@ -108,6 +108,7 @@ fn fetch() -> Result<Fetched, String> {
     };
     Ok(Fetched {
         groups: vec![Group {
+            note: None,
             name: String::new(),
             windows,
         }],

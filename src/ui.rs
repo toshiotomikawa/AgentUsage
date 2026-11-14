@@ -882,6 +882,16 @@ impl Dashboard {
                         );
                         y += m.group;
                     }
+                    if let Some(note) = &g.note {
+                        p.text(
+                            pos2(inner.left(), y),
+                            Align2::LEFT_TOP,
+                            capitalize(&lang.data(note)),
+                            FontId::proportional(12.5),
+                            pal.faint.gamma_multiply(a),
+                        );
+                        y += NOTE_H;
+                    }
                     for (wi, w) in g.windows.iter().enumerate() {
                         let row =
                             Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), m.row));
@@ -1123,6 +1133,9 @@ fn grid_rows(cards: &[&Account], cols: usize, m: &Metrics) -> (Vec<(f32, f32)>, 
     (out, total)
 }
 
+/// Height of the line that says why a group has no windows.
+const NOTE_H: f32 = 22.0;
+
 /// Height of a card whose content ends exactly `pad` above its bottom edge, like the top.
 fn card_height(a: &Account, m: &Metrics) -> f32 {
     let body = match &a.reading {
@@ -1136,8 +1149,12 @@ fn card_height(a: &Account, m: &Metrics) -> f32 {
             } else {
                 0.0
             };
+            let notes = groups.iter().filter(|g| g.note.is_some()).count() as f32 * NOTE_H;
             // The last row's bar ends 28 px into it.
-            rows.saturating_sub(1) as f32 * m.row + if rows > 0 { 28.0 } else { 0.0 } + heads
+            rows.saturating_sub(1) as f32 * m.row
+                + if rows > 0 { 28.0 } else { 0.0 }
+                + heads
+                + notes
         }
     };
     m.pad * 2.0 + m.head + m.gap * BODY_GAP + body

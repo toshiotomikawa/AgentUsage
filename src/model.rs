@@ -112,6 +112,8 @@ pub struct Group {
     /// Empty for providers with a single group.
     pub name: String,
     pub windows: Vec<Window>,
+    /// Why the group has no windows (a Claude account that cannot be read right now).
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -201,17 +203,35 @@ pub fn merge_claude(accounts: &[Account]) -> Vec<Account> {
             }
         }
     }
+    // An account no folder can read right now (signed out, say) keeps its place on the card
+    // with the reason, instead of vanishing behind the accounts that still read.
+    let mut down: Vec<(String, String)> = Vec::new();
+    for a in &claude {
+        if let Reading::Unavailable(r) = &a.reading {
+            let name = a.account.clone().unwrap_or_default();
+            if !ok.iter().any(|(n, _, _)| *n == name) && !down.iter().any(|(n, _)| *n == name) {
+                down.push((name, r.clone()));
+            }
+        }
+    }
     ok.sort_by_key(|x| x.0.to_lowercase());
     let reading = if !ok.is_empty() {
-        let single = ok.len() == 1;
-        Reading::Ok(
-            ok.iter()
-                .map(|(name, _, groups)| Group {
-                    name: if single { String::new() } else { name.clone() },
-                    windows: groups.iter().flat_map(|g| g.windows.clone()).collect(),
-                })
-                .collect(),
-        )
+        let single = ok.len() == 1 && down.is_empty();
+        let mut groups: Vec<Group> = ok
+            .iter()
+            .map(|(name, _, groups)| Group {
+                name: if single { String::new() } else { name.clone() },
+                windows: groups.iter().flat_map(|g| g.windows.clone()).collect(),
+                note: None,
+            })
+            .chain(down.into_iter().map(|(name, reason)| Group {
+                name,
+                windows: Vec::new(),
+                note: Some(reason),
+            }))
+            .collect();
+        groups.sort_by_key(|g| g.name.to_lowercase());
+        Reading::Ok(groups)
     } else if claude.iter().any(|a| matches!(a.reading, Reading::Loading)) {
         Reading::Loading
     } else {
@@ -291,6 +311,7 @@ mod limit_tests {
             title: None,
             account: Some(name.into()),
             reading: Reading::Ok(vec![Group {
+                note: None,
                 name: String::new(),
                 windows: vec![Window::new("5 horas", rem).length_mins(300)],
             }]),
@@ -317,6 +338,24 @@ mod limit_tests {
         let rings = out[0].by_period();
         assert!((rings[0].unwrap().remaining - 0.4).abs() < 1e-4);
         assert!(rings[1].is_none() && rings[2].is_none());
+    }
+
+    #[test]
+    fn signed_out_claude_account_stays_on_the_card() {
+        let mut out_acc = claude("c0", "me", 0.8, 5);
+        out_acc.reading = Reading::Unavailable("login expirado".into());
+        // A twin folder of a readable account adds nothing.
+        let mut twin = claude("c3", "wife", 0.1, 1);
+        twin.reading = Reading::Unavailable("sem conexão".into());
+        let accs = vec![out_acc, claude("c1", "wife", 1.0, 10), twin];
+        let out = merge_claude(&accs);
+        let Reading::Ok(groups) = &out[0].reading else {
+            panic!()
+        };
+        let names: Vec<_> = groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, ["me", "wife"]);
+        assert_eq!(groups[0].note.as_deref(), Some("login expirado"));
+        assert!(groups[0].windows.is_empty() && groups[1].note.is_none());
     }
 
     #[test]

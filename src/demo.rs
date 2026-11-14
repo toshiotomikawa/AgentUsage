@@ -11,6 +11,7 @@ fn w(label: &str, remaining: f32, resets_in_mins: i64, len_mins: u64) -> Window 
 
 fn one(windows: Vec<Window>) -> Reading {
     Reading::Ok(vec![Group {
+        note: None,
         name: String::new(),
         windows,
     }])
@@ -81,6 +82,7 @@ pub fn accounts() -> Vec<Account> {
             None,
             Reading::Ok(vec![
                 Group {
+                    note: None,
                     name: "Gemini".into(),
                     windows: vec![
                         w("5 horas", 0.99, 297, 300),
@@ -88,6 +90,7 @@ pub fn accounts() -> Vec<Account> {
                     ],
                 },
                 Group {
+                    note: None,
                     name: "Claude & GPT".into(),
                     windows: vec![
                         w("5 horas", 1.0, 300, 300),
@@ -95,6 +98,7 @@ pub fn accounts() -> Vec<Account> {
                     ],
                 },
                 Group {
+                    note: None,
                     name: "Gemini 4 Argon".into(),
                     windows: vec![w("Semanal", 0.87, 5 * 1440 + 6 * 60, 10_080)],
                 },

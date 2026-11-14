@@ -340,6 +340,7 @@ mod tests {
     fn ok() -> Result<Fetched, String> {
         Ok(Fetched {
             groups: vec![Group {
+                note: None,
                 name: String::new(),
                 windows: vec![Window::new("5 horas", 0.5)],
             }],
@@ -387,6 +388,7 @@ mod tests {
             title: None,
             account: None,
             reading: Reading::Ok(vec![Group {
+                note: None,
                 name: String::new(),
                 windows: vec![Window::new("5 horas", 0.2).resets(Some(resets))],
             }]),

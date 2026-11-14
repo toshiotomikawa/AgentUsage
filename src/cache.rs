@@ -130,6 +130,7 @@ fn decode(v: &Value, now: DateTime<Utc>) -> Option<Saved> {
             windows.push(win);
         }
         groups.push(Group {
+            note: None,
             name: g.get("name")?.as_str()?.to_string(),
             windows,
         });
@@ -144,6 +145,7 @@ mod tests {
 
     fn groups(now: DateTime<Utc>) -> Vec<Group> {
         vec![Group {
+            note: None,
             name: "Gemini".into(),
             windows: vec![
                 Window::new("5 horas", 0.67)

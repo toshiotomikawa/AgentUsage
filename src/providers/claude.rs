@@ -235,6 +235,7 @@ fn fetch(
     }
     Ok(Fetched {
         groups: vec![Group {
+            note: None,
             name: String::new(),
             windows,
         }],

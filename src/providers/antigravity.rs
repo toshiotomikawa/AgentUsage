@@ -105,6 +105,7 @@ pub(crate) fn parse(v: &Value) -> Vec<Group> {
         // Shortest window first: 5 hours, then weekly.
         windows.sort_by_key(|w| w.length.map(|d| d.as_secs()).unwrap_or(u64::MAX));
         out.push(Group {
+            note: None,
             name: short_group(name),
             windows,
         });
