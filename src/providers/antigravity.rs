@@ -55,16 +55,22 @@ fn run_usage() -> Result<String, String> {
         .map(|d| d.join("agy").join("bin").join("agy.exe"))
         .filter(|p| p.is_file())
         .map_or_else(|| "agy".into(), |p| p.into_os_string());
-    crate::hidden::run(
-        &exe,
-        &["-p", "/usage", "--output-format", "json"],
-        &std::env::temp_dir(),
-        Duration::from_secs(45),
-    )
-    .map_err(|e| match e.as_str() {
-        "not found" => "agy não encontrado".to_string(),
-        "timeout" => "agy não respondeu".to_string(),
-        _ => "agy falhou".to_string(),
+    // agy otherwise writes a new log file under ~/.gemini/antigravity-cli/log on every call,
+    // thousands a day at this refresh rate. One file of our own, overwritten each time, instead.
+    let log = dirs::data_local_dir()
+        .map(|d| d.join("agent-usage").join("cache"))
+        .filter(|d| std::fs::create_dir_all(d).is_ok())
+        .map(|d| d.join("agy.log").to_string_lossy().into_owned());
+    let mut args = vec!["-p", "/usage", "--output-format", "json"];
+    if let Some(log) = &log {
+        args.extend(["--log-file", log]);
+    }
+    crate::hidden::run(&exe, &args, &std::env::temp_dir(), Duration::from_secs(45)).map_err(|e| {
+        match e.as_str() {
+            "not found" => "agy não encontrado".to_string(),
+            "timeout" => "agy não respondeu".to_string(),
+            _ => "agy falhou".to_string(),
+        }
     })
 }
 
