@@ -87,14 +87,12 @@ impl Window {
         if self.remaining < 0.10 {
             return Status::Critical;
         }
-        let behind_pace = self
-            .time_left_fraction(now)
-            .is_some_and(|t| t - self.remaining > 0.15);
-        if self.remaining <= 0.25 || behind_pace {
-            Status::Warning
-        } else {
-            Status::Ok
-        }
+        // With a timer, only falling behind pace warns; without one, a low level does.
+        let warn = match self.time_left_fraction(now) {
+            Some(t) => t - self.remaining > 0.15,
+            None => self.remaining <= 0.25,
+        };
+        if warn { Status::Warning } else { Status::Ok }
     }
 }
 
@@ -272,6 +270,11 @@ mod tests {
             .length_mins(10_080);
         assert!((w.time_left_fraction(now).unwrap() - 0.5).abs() < 0.01);
         assert_eq!(w.status(now), Status::Warning);
+        // 25% left with 26 minutes of 5 hours to go: on pace, so not a warning.
+        let on_pace = Window::new("5 horas", 0.25)
+            .resets(Some(now + D::minutes(26)))
+            .length_mins(300);
+        assert_eq!(on_pace.status(now), Status::Ok);
         assert_eq!(Window::new("x", 0.0).status(now), Status::Empty);
         assert_eq!(Window::new("x", 0.08).status(now), Status::Critical);
         assert_eq!(Window::new("x", 0.9).status(now), Status::Ok);

@@ -9,8 +9,8 @@ left: Antigravity, Claude (several accounts), Codex, Cursor & Grok and OpenCode 
 
 - **One row per quota window** (5 hours, weekly, monthly…), always as **% remaining**, with the
   time until it resets next to it.
-- **Color shows the state:** green is on pace; amber asks for attention (little quota left or
-  usage ahead of pace); wine is critical, below 10%; gray is exhausted until it resets.
+- **Color shows the state:** green is on pace; amber asks for attention (usage ahead of pace, or
+  little quota left on a window with no timer); wine is critical, below 10%; gray is exhausted until it resets.
 - **Title bar menu:** language (PT-BR, EN-US), theme (system, light, dark), which cards to show,
   GitHub, and Update, which looks for a new version in the repository's releases. Choices are
   saved.
