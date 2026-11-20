@@ -98,8 +98,13 @@ pub(crate) fn parse(v: &Value) -> Vec<Group> {
                 Some("monthly") => ("Mensal", 43_200),
                 _ => ("Limite", 0),
             };
-            let mut w =
-                Window::new(label, rem as f32).resets(b.get("reset_time").and_then(parse_time));
+            // An untouched window's timer has not started: agy reports the Unix epoch. Kept, it
+            // read as a reset already past, and the saved reading was refused for being stale.
+            let reset = b
+                .get("reset_time")
+                .and_then(parse_time)
+                .filter(|t| t.timestamp() > 0);
+            let mut w = Window::new(label, rem as f32).resets(reset);
             if mins > 0 {
                 w = w.length_mins(mins);
             }
@@ -149,7 +154,7 @@ mod tests {
               {"name":"Gemini Models","buckets":[
                 {"window":"weekly","remaining_fraction":0.5,"reset_time":"2026-11-14T21:25:05Z"},
                 {"window":"5h","remaining_fraction":0.99,"reset_time":"2026-11-08T02:25:05Z"}]},
-              {"name":"Claude and GPT models","buckets":[{"window":"5h","remaining_fraction":1}]},
+              {"name":"Claude and GPT models","buckets":[{"window":"5h","remaining_fraction":1,"reset_time":"1970-01-01T00:00:00Z"}]},
               {"name":"Gemini 4 Argon","buckets":[{"window":"weekly","remaining_fraction":0.98}]}]}}}"#,
         )
         .unwrap();
@@ -160,6 +165,7 @@ mod tests {
         assert!((g[0].windows[1].remaining - 0.5).abs() < 1e-4);
         assert!(g[0].windows[1].resets_at.is_some());
         assert_eq!(g[1].name, "Claude & GPT");
+        assert!(g[1].windows[0].resets_at.is_none());
         assert_eq!(g[2].name, "Gemini 4 Argon");
     }
 }
