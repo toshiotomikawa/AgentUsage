@@ -11,6 +11,10 @@ use std::time::Duration;
 /// Output beyond this is not a usage report; the run fails instead of growing without bound.
 const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
 
+/// How long the output may take to finish arriving once the program has ended.
+#[cfg(windows)]
+const OUTPUT_GRACE: Duration = Duration::from_secs(10);
+
 #[cfg(not(windows))]
 pub fn run(
     exe: &std::ffi::OsStr,
@@ -236,23 +240,30 @@ pub fn run(
         // Only the child (and its helpers) hold the write end now.
         drop(write);
 
-        let reader = std::thread::spawn(move || {
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
             let mut s = String::new();
             let _ = reader_file.take(MAX_OUTPUT + 1).read_to_string(&mut s);
-            s
+            let _ = sent.send(s);
         });
         let ms = timeout.as_millis().min(u32::MAX as u128) as u32;
         let finished = WaitForSingleObject(process.0, ms) == WAIT_OBJECT_0;
         if !finished {
             TerminateProcess(process.0, 1);
         }
-        // Ends any helper still running, which also closes the pipe for the reader.
+        // Ends any helper still running, which also closes the pipe for the reader. A process
+        // that left the job could still hold it open, so the wait for the output is bounded:
+        // waiting on it forever froze a source for good.
         drop(job);
-        let out = reader.join().map_err(|_| "failed".to_string())?;
-        // Closing the console ends what it draws, so the drain finishes too.
+        let out = received.recv_timeout(OUTPUT_GRACE);
+        // Closing the console ends what it draws, so the drain finishes on its own; it is not
+        // waited for, for the same reason.
         drop(attrs);
         drop(pty);
-        let _ = drain.join();
+        drop(drain);
+        let Ok(out) = out else {
+            return Err("timeout".into());
+        };
         if out.len() as u64 > MAX_OUTPUT {
             return Err("failed".into());
         }

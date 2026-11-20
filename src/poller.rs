@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 pub struct Shared {
     pub accounts: Vec<Account>,
     pub in_flight: usize,
-    /// Sources with a read in progress; a source never runs twice at once.
-    pub fetching: std::collections::HashSet<String>,
+    /// Sources with a read in progress, and when it started; a source never runs twice at once.
+    pub fetching: HashMap<String, Instant>,
     pub last_refresh: Option<chrono::DateTime<Utc>>,
 }
 
@@ -75,13 +75,14 @@ fn run(
         {
             let mut s = shared.lock().unwrap();
             s.last_refresh = Some(Utc::now());
+            expire_stuck(&mut s, Instant::now());
         }
         for src in &sources {
             // A reading is a shared fact: take a fresher one another copy of the app saved, or
             // one a sibling folder signed in to the same account made, before asking the vendor.
             {
                 let mut s = shared.lock().unwrap();
-                if src.remember && !s.fetching.contains(&src.key) {
+                if src.remember && !s.fetching.contains_key(&src.key) {
                     adopt_saved(&mut s, src);
                 }
                 adopt_twin(&mut s, src);
@@ -224,8 +225,29 @@ fn twin_fetching(s: &Shared, src: &Source) -> bool {
         a.key != src.key
             && a.provider == me.provider
             && a.account.as_ref() == Some(name)
-            && s.fetching.contains(&a.key)
+            && s.fetching.contains_key(&a.key)
     })
+}
+
+/// A read that has not come back after this long is treated as dead. Every fetch has its own
+/// shorter timeout, so only a hung one gets here; without this its source would never be read
+/// again, nor take the readings other copies save (the phone feed froze this way, 19/11/2026).
+const STUCK_AFTER: Duration = Duration::from_secs(180);
+
+/// Forget reads stuck past `STUCK_AFTER`, so their sources are read again.
+fn expire_stuck(s: &mut Shared, now: Instant) {
+    let before = s.fetching.len();
+    s.fetching
+        .retain(|_, started| now.duration_since(*started) < STUCK_AFTER);
+    s.in_flight = s.in_flight.saturating_sub(before - s.fetching.len());
+}
+
+/// Ends the read that started at `started`, unless it was expired and a newer one took its place.
+fn finish(s: &mut Shared, key: &str, started: Instant) {
+    if s.fetching.get(key) == Some(&started) {
+        s.fetching.remove(key);
+        s.in_flight = s.in_flight.saturating_sub(1);
+    }
 }
 
 /// Start one read of `src` unless one is already running here or in another copy of the app.
@@ -239,11 +261,13 @@ fn spawn_fetch(src: Source, shared: Arc<Mutex<Shared>>, ctx: eframe::egui::Conte
     } else {
         None
     };
+    let started_at = Instant::now();
     {
         let mut s = shared.lock().unwrap();
-        if !s.fetching.insert(src.key.clone()) {
+        if s.fetching.contains_key(&src.key) {
             return false;
         }
+        s.fetching.insert(src.key.clone(), started_at);
         s.in_flight += 1;
     }
     let started = std::thread::Builder::new()
@@ -262,8 +286,7 @@ fn spawn_fetch(src: Source, shared: Arc<Mutex<Shared>>, ctx: eframe::egui::Conte
                 }
                 drop(lease);
                 let mut s = shared.lock().unwrap();
-                s.fetching.remove(&src.key);
-                s.in_flight = s.in_flight.saturating_sub(1);
+                finish(&mut s, &src.key, started_at);
                 apply(&mut s, &src, result);
                 drop(s);
                 ctx.request_repaint();
@@ -271,8 +294,7 @@ fn spawn_fetch(src: Source, shared: Arc<Mutex<Shared>>, ctx: eframe::egui::Conte
         });
     if started.is_err() {
         let mut s = shared.lock().unwrap();
-        s.fetching.remove(&src.key);
-        s.in_flight = s.in_flight.saturating_sub(1);
+        finish(&mut s, &src.key, started_at);
         return false;
     }
     true
@@ -360,6 +382,29 @@ mod tests {
             fetched_at: None,
         });
         s
+    }
+
+    #[test]
+    fn a_stuck_read_expires_and_its_late_end_leaves_the_new_read_alone() {
+        let mut s = Shared::default();
+        let old = Instant::now();
+        s.fetching.insert("k".into(), old);
+        s.in_flight = 1;
+        expire_stuck(&mut s, old + STUCK_AFTER - Duration::from_secs(1));
+        assert!(s.fetching.contains_key("k"));
+        expire_stuck(&mut s, old + STUCK_AFTER);
+        assert!(s.fetching.is_empty());
+        assert_eq!(s.in_flight, 0);
+
+        let new = old + STUCK_AFTER;
+        s.fetching.insert("k".into(), new);
+        s.in_flight = 1;
+        finish(&mut s, "k", old);
+        assert_eq!(s.fetching.get("k"), Some(&new));
+        assert_eq!(s.in_flight, 1);
+        finish(&mut s, "k", new);
+        assert!(s.fetching.is_empty());
+        assert_eq!(s.in_flight, 0);
     }
 
     #[test]
