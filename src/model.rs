@@ -76,7 +76,7 @@ impl Window {
     /// window away (vendors report "now + length" until the first message). Its countdown and
     /// pace marker would only restate the window's length.
     pub fn idle(&self, now: DateTime<Utc>) -> bool {
-        self.remaining >= 0.995 && self.time_left_fraction(now).is_none_or(|t| t >= 0.99)
+        self.remaining >= 0.995 && self.time_left_fraction(now).is_none_or(|t| t >= 0.99 || t <= 0.0)
     }
 
     pub fn status(&self, now: DateTime<Utc>) -> Status {
@@ -295,6 +295,11 @@ mod tests {
             .resets(Some(now + D::minutes(299)))
             .length_mins(300);
         assert!(!used.idle(now));
+        // Antigravity reports the epoch for a window whose timer has not started.
+        let epoch = Window::new("5 horas", 1.0)
+            .resets(DateTime::from_timestamp(0, 0))
+            .length_mins(300);
+        assert!(epoch.idle(now));
     }
 
     #[test]
