@@ -3,7 +3,7 @@ name = "agent-usage"
 version = "0.1.1"
 edition = "2024"
 license = "MIT"
-description = "A minimalist, animated desktop app."
+description = "Desktop dashboard for the quota left on Antigravity, Claude, Codex, Cursor and OpenCode."
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
