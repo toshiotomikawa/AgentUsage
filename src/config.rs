@@ -7,7 +7,7 @@
 //! antigravity = false
 //! # Seconds between automatic refreshes.
 //! refresh_secs = 20
-//! # Local port of the read-only snapshot for the phone app (127.0.0.1 only). 0 turns it off.
+//! # Local port of the read-only snapshot for the phone app (127.0.0.1 only). Off unless set.
 //! share_port = 47321
 //! ```
 
@@ -29,7 +29,7 @@ impl Default for Config {
             claude_dirs: Vec::new(),
             antigravity: true,
             refresh_secs: 20,
-            share_port: 47321,
+            share_port: 0,
         }
     }
 }

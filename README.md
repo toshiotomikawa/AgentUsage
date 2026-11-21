@@ -5,6 +5,18 @@ left: Antigravity, Claude (several accounts), Codex, Cursor & Grok and OpenCode 
 
 ![AgentUsage, light theme](docs/demo-light.png)
 
+## Download
+
+**Windows (x64):** get `AgentUsage-v0.1.0-windows-x64.exe` from
+[Releases](https://github.com/toshiotomikawa/AgentUsage/releases/latest) and run it. It is a single
+portable file: no installer and no API keys, since it reads the logins your CLIs already keep. Run
+it with `--demo` to see it with fictional data first.
+
+The exe is not code-signed, so Windows SmartScreen may warn on first run: choose **More info**, then
+**Run anyway**. `SHA256SUMS.txt` on the release page lets you check the file.
+
+Other systems: build from source (see [Run](#run)). Only Windows is tested.
+
 ## How to read it
 
 - **One row per quota window** (5 hours, weekly, monthly…), always as **% remaining**, with the
@@ -53,6 +65,7 @@ file, without having to open Claude Code.
 claude_dirs = ["C:/Users/you/.claude-work"]  # other Claude Code account folders
 antigravity = false                           # turns off the Antigravity reading
 refresh_secs = 20
+share_port = 47321                            # read-only snapshot for a phone app on 127.0.0.1; off unless set
 ```
 
 ## Run
