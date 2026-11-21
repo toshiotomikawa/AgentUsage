@@ -34,6 +34,7 @@ pub struct Actions {
     pub cycle_theme: bool,
     pub toggle_lang: bool,
     pub check_update: bool,
+    pub install_update: bool,
     /// Show or hide this card.
     pub toggle_card: Option<String>,
 }
@@ -345,13 +346,16 @@ impl Dashboard {
                         // A quiet note on the right: the current theme, or the update check.
                         let note = match (item, &f.update) {
                             (Item::Theme, _) => Some((f.theme.name(lang).to_string(), pal.faint)),
-                            (Item::Update, UpdateState::Checking) => {
-                                Some(("\u{2026}".to_string(), pal.faint))
-                            }
+                            (
+                                Item::Update,
+                                UpdateState::Checking
+                                | UpdateState::Installing
+                                | UpdateState::Ready,
+                            ) => Some(("\u{2026}".to_string(), pal.faint)),
                             (Item::Update, UpdateState::UpToDate) => {
                                 Some((lang.t("em dia", "up to date").to_string(), pal.ok))
                             }
-                            (Item::Update, UpdateState::Available(v, _)) => {
+                            (Item::Update, UpdateState::Available(v, ..)) => {
                                 Some((format!("v{v}"), pal.warn))
                             }
                             (Item::Update, UpdateState::Failed) => {
@@ -467,10 +471,14 @@ impl Dashboard {
                     self.close_menu(now);
                 }
                 Some(Item::Update) => match &f.update {
-                    UpdateState::Available(_, url) => {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-                        self.close_menu(now);
+                    UpdateState::Available(_, _, asset) => {
+                        act.install_update = true;
+                        // Without an installable exe the click opens the release page.
+                        if asset.is_none() {
+                            self.close_menu(now);
+                        }
                     }
+                    UpdateState::Installing | UpdateState::Ready => {}
                     _ => act.check_update = true,
                 },
                 None => {}

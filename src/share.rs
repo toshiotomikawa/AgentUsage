@@ -18,16 +18,22 @@ pub fn start(port: u16, shared: Arc<Mutex<Shared>>) {
     if port == 0 {
         return;
     }
-    let listener = match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(l) => l,
-        Err(_) => {
-            eprintln!("porta {port} ocupada; o app do celular fica sem dados");
-            return;
-        }
-    };
     let _ = std::thread::Builder::new()
         .name("share".into())
         .spawn(move || {
+            // Right after an update the old process may still hold the port for a moment.
+            let mut listener = None;
+            for _ in 0..20 {
+                if let Ok(l) = TcpListener::bind(("127.0.0.1", port)) {
+                    listener = Some(l);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            let Some(listener) = listener else {
+                eprintln!("porta {port} ocupada; o app do celular fica sem dados");
+                return;
+            };
             for stream in listener.incoming().flatten() {
                 let shared = shared.clone();
                 let _ = std::thread::Builder::new()

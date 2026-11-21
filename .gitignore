@@ -22,3 +22,6 @@ secrets/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Uploaded in repository settings, not used by the build
+docs/social-preview.png

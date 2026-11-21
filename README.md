@@ -1,53 +1,39 @@
 # AgentUsage
 
-A desktop dashboard, written in Rust, that shows in real time how much quota each AI agent has
-left: Antigravity, Claude (several accounts), Codex, Cursor & Grok and OpenCode Go.
+Desktop dashboard, in Rust, for the quota left on Antigravity, Claude (several accounts), Codex,
+Cursor & Grok and OpenCode Go.
 
-![AgentUsage, light theme](docs/demo-light.png)
+<img src="docs/demo-light.png" alt="AgentUsage, light theme" width="49%"> <img src="docs/demo-dark.png" alt="AgentUsage, dark theme" width="49%">
 
-## Download
+## Install
 
-**Windows (x64):** get `AgentUsage-v0.1.0-windows-x64.exe` from
-[Releases](https://github.com/toshiotomikawa/AgentUsage/releases/latest) and run it. It is a single
-portable file: no installer and no API keys, since it reads the logins your CLIs already keep. Run
-it with `--demo` to see it with fictional data first.
+Windows x64: get the `-windows-x64.exe` from
+[Releases](https://github.com/toshiotomikawa/AgentUsage/releases/latest) and run it. Portable,
+no installer, no API keys: it reads the logins your CLIs already keep. `--demo` shows fictional
+data. The exe is unsigned, so SmartScreen may warn (**More info**, **Run anyway**); check it
+against `SHA256SUMS.txt`. Other systems: build from source, untested.
 
-The exe is not code-signed, so Windows SmartScreen may warn on first run: choose **More info**, then
-**Run anyway**. `SHA256SUMS.txt` on the release page lets you check the file.
+**Updates:** menu, **Update**. The first click checks; on Windows a second click downloads the
+new exe, verifies its SHA-256 against GitHub's digest, swaps it in and restarts (elsewhere it opens
+Releases).
 
-Other systems: build from source (see [Run](#run)). Only Windows is tested.
+## Reading it
 
-## How to read it
+- One row per quota window (5 h, weekly, monthly), as % remaining plus time to reset.
+- Green: on pace. Amber: over 15% ahead of pace, or 25% or less with no reset timer. Wine: under
+  10%. Gray: exhausted until reset.
+- The tick on each bar is even-usage pace; a bar left of it is spending faster than time passes.
+- Corner rings, outside in: hourly, weekly, monthly (tightest window of each).
+- Hover: reset date and forecast ("runs out in 2h 10m").
+- Refresh: every 20 s (minimum 15), Claude every 5 min (longer when the service asks); **F5**,
+  **Ctrl+R** or the reload button force one within those limits.
+- Windows tray: closing keeps it running; click the icon to show or hide; its menu has Open and End.
+- Title-bar menu: language (PT-BR, EN-US), theme, visible cards, GitHub, Update. Saved.
 
-- **One row per quota window** (5 hours, weekly, monthly…), always as **% remaining**, with the
-  time until it resets next to it.
-- **Color shows the state:** green is on pace; amber asks for attention (usage ahead of pace, or
-  little quota left on a window with no timer); wine is critical, below 10%; gray is exhausted until it resets.
-- **Title bar menu:** language (PT-BR, EN-US), theme (system, light, dark), which cards to show,
-  GitHub, and Update, which looks for a new version in the repository's releases. Choices are
-  saved.
-- **The tick on each bar marks the pace:** (hover to see the state) it is where the bar would be
-  with even usage until the reset. A bar left of the tick means you are spending faster than time
-  passes.
-- The rings in the corner of each card show, from outside in, the hours, weekly and monthly
-  windows (the tightest of each).
-- All Claude accounts share one card, one section per account.
-- Details stay hidden and appear on hover: the reset date and a forecast ("runs out in 2h 10m").
-- Refreshes on its own every 20 s; Claude every 5 min, waiting longer when the service asks.
-  **F5** or the reload button in the title bar ask for a fresh reading within those limits; a
-  check mark confirms when it finishes.
-- **Tray icon (Windows):** closing the window keeps the app in the tray. One click on the icon
-  shows or hides the window; its menu has Open and End. Opening the app again brings the open
-  window forward.
+## Data
 
-![AgentUsage, dark theme](docs/demo-dark.png)
-
-## Where the data comes from
-
-The app reads the login each CLI already keeps on your machine and queries only that vendor's own
-service. Tokens travel only over HTTPS, with no redirects, to the vendor's own service. When the
-Claude login expires, the app renews it the way Claude Code does and writes it back to the same
-file, without having to open Claude Code.
+Each login is read locally and sent only to that vendor, over HTTPS, without redirects. An
+expired Claude login is renewed the way Claude Code does it and written back to the same file.
 
 | Agent | Login read | Query |
 | --- | --- | --- |
@@ -55,39 +41,27 @@ file, without having to open Claude Code.
 | Codex | `~/.codex/auth.json` | `chatgpt.com/backend-api/wham/usage` |
 | Cursor & Grok | `%APPDATA%/Cursor/auth.json` | `api2.cursor.sh` (DashboardService) |
 | OpenCode Go | `~/.local/share/opencode` | `opencode.ai/zen/go/v1/usage` |
-| Antigravity | `agy` session | `agy -p /usage --output-format json` (spends no tokens) |
+| Antigravity | `agy` session | `agy -p /usage --output-format json` (no tokens spent) |
 
-## Configuration (optional)
+## Config
 
-`%APPDATA%\agent-usage\config.toml` on Windows (`~/.config/agent-usage/config.toml` on Linux):
+Optional, `%APPDATA%\agent-usage\config.toml` (Linux: `~/.config/agent-usage/config.toml`):
 
 ```toml
-claude_dirs = ["C:/Users/you/.claude-work"]  # other Claude Code account folders
-antigravity = false                           # turns off the Antigravity reading
-refresh_secs = 20
-share_port = 47321                            # read-only snapshot for a phone app on 127.0.0.1; off unless set
+claude_dirs = ["C:/Users/you/.claude-work"]  # extra Claude Code account folders
+antigravity = false                           # skip Antigravity
+refresh_secs = 20                             # minimum 15
+share_port = 47321                            # read-only snapshot on 127.0.0.1; off unless set
 ```
 
-## Run
+## Build
 
 ```bash
-cargo run --release
+cargo run --release              # add -- --demo for fictional data
 ```
 
-To see the interface with fictional data, without any login:
-
-```bash
-cargo run --release -- --demo
-```
-
-## Install on Windows
-
-Builds the app, copies it to `%LOCALAPPDATA%\Programs\AgentUsage` and creates an "AgentUsage"
-shortcut on the Desktop and in the Start menu. Run it again after updating the code.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/install.ps1
-```
+`powershell -ExecutionPolicy Bypass -File scripts/install.ps1` builds, installs to
+`%LOCALAPPDATA%\Programs\AgentUsage` and adds Desktop and Start menu shortcuts.
 
 ## License
 

@@ -76,7 +76,10 @@ impl Window {
     /// window away (vendors report "now + length" until the first message). Its countdown and
     /// pace marker would only restate the window's length.
     pub fn idle(&self, now: DateTime<Utc>) -> bool {
-        self.remaining >= 0.995 && self.time_left_fraction(now).is_none_or(|t| t >= 0.99 || t <= 0.0)
+        self.remaining >= 0.995
+            && self
+                .time_left_fraction(now)
+                .is_none_or(|t| t >= 0.99 || t <= 0.0)
     }
 
     pub fn status(&self, now: DateTime<Utc>) -> Status {

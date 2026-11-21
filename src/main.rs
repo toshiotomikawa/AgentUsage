@@ -198,6 +198,20 @@ impl eframe::App for App {
             let c = ctx.clone();
             self.updates.check(move |_| c.request_repaint());
         }
+        if act.install_update {
+            let (c, page) = (ctx.clone(), ctx.clone());
+            self.updates.install(
+                move |url| page.open_url(egui::OpenUrl::new_tab(url)),
+                move |_| c.request_repaint(),
+            );
+        }
+        // The new exe is in place: start it and leave.
+        if self.updates.state() == update::State::Ready && self.updates.relaunch() {
+            #[cfg(windows)]
+            tray::quit();
+            #[cfg(not(windows))]
+            std::process::exit(0);
+        }
 
         if act.refresh || key_refresh {
             if key_refresh {
@@ -287,7 +301,7 @@ fn run_background() {
 fn main() -> eframe::Result {
     // agy updates itself from a detached background process. Started by our quota check, that
     // updater dies with our job object mid-download, and its `agy.exe --version` probe opens a
-    // visible console window. The Admin's own agy sessions still keep agy up to date.
+    // visible console window. The user's own agy sessions still keep agy up to date.
     // SAFETY: set before any other thread exists.
     unsafe { std::env::set_var("AGY_CLI_DISABLE_AUTO_UPDATE", "1") };
     if std::env::args().any(|a| a == "--background") {
@@ -300,10 +314,13 @@ fn main() -> eframe::Result {
         args.demo = true;
     }
     // Opening the app again (e.g. from its shortcut) brings the open window forward.
+    // After an update the old window is still closing, so this run must not hand over to it.
+    let updated = std::env::args().any(|a| a == update::UPDATED_ARG);
     #[cfg(windows)]
-    if args.screenshot.is_none() && tray::focus_running() {
+    if args.screenshot.is_none() && !updated && tray::focus_running() {
         return Ok(());
     }
+    update::clean_up();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("AgentUsage")
