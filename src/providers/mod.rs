@@ -55,16 +55,19 @@ pub fn discover(cfg: &Config) -> Vec<Source> {
 
 // ---------- shared helpers ----------
 
-pub(crate) fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(15)))
-        .http_status_as_error(false)
-        // Tokens go only to the vendor's own HTTPS host: no plain HTTP, no redirects.
-        .https_only(true)
-        .max_redirects(0)
-        .user_agent(concat!("agent-usage/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .into()
+pub(crate) fn agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(15)))
+            .http_status_as_error(false)
+            // Tokens go only to the vendor's own HTTPS host: no plain HTTP, no redirects.
+            .https_only(true)
+            .max_redirects(0)
+            .user_agent(concat!("agent-usage/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .into()
+    })
 }
 
 /// Login and settings files are small; anything larger is not one.

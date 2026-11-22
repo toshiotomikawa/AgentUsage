@@ -15,12 +15,15 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Minimum seconds between `agy -p /usage` runs (each launch spawns a ~165 MB CLI process).
+const MIN_INTERVAL_SECS: u64 = 60;
+
 pub fn source() -> Source {
     Source {
         key: "antigravity".into(),
         provider: Provider::Antigravity,
         fetch: Arc::new(fetch),
-        min_interval: None,
+        min_interval: Some(MIN_INTERVAL_SECS),
         optional: false,
         // agy takes a few seconds to answer: show its last reading at once on launch.
         remember: true,
@@ -145,6 +148,11 @@ mod tests {
     fn live_usage() {
         let f = fetch().unwrap();
         assert!(!f.groups.is_empty());
+    }
+
+    #[test]
+    fn polls_at_most_once_a_minute() {
+        assert_eq!(source().min_interval, Some(60));
     }
 
     #[test]

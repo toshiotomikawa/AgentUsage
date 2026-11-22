@@ -137,7 +137,9 @@ fn run(
                 last_run.insert(src.key.clone(), Instant::now());
             }
         }
-        ctx.request_repaint();
+        if window_visible() {
+            ctx.request_repaint();
+        }
         // Wait for the interval or a manual refresh.
         match rx.recv_timeout(every) {
             Ok(()) => manual = true,
@@ -146,6 +148,17 @@ fn run(
         }
         // Collapse a burst of clicks into one refresh.
         while rx.try_recv().is_ok() {}
+    }
+}
+
+fn window_visible() -> bool {
+    #[cfg(windows)]
+    {
+        crate::tray::is_visible()
+    }
+    #[cfg(not(windows))]
+    {
+        true
     }
 }
 
@@ -289,7 +302,9 @@ fn spawn_fetch(src: Source, shared: Arc<Mutex<Shared>>, ctx: eframe::egui::Conte
                 finish(&mut s, &src.key, started_at);
                 apply(&mut s, &src, result);
                 drop(s);
-                ctx.request_repaint();
+                if window_visible() {
+                    ctx.request_repaint();
+                }
             }
         });
     if started.is_err() {

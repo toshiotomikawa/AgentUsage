@@ -180,6 +180,12 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             tray::hide();
         }
+        // Skip layout, painting and 1 s countdown timers while hidden in the tray or minimized;
+        // `tray::show` requests a repaint as soon as the window comes back.
+        #[cfg(windows)]
+        if self.screenshot.is_none() && !tray::is_visible() {
+            return;
+        }
 
         let key_refresh = ctx.input(|i| {
             i.key_pressed(egui::Key::F5) || (i.modifiers.command && i.key_pressed(egui::Key::R))

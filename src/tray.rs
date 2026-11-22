@@ -102,6 +102,12 @@ pub fn hide() {
     }
 }
 
+/// Whether the main window is currently shown on screen (not hidden in the tray or minimized).
+pub fn is_visible() -> bool {
+    let Some(h) = hwnd() else { return true };
+    unsafe { IsWindowVisible(h) != 0 && IsIconic(h) == 0 }
+}
+
 /// Keep a start at sign-in in the tray. eframe shows the window after its first frame whatever
 /// the viewport says, so the window is minimised first (nothing appears on screen) and hidden as
 /// soon as eframe has shown it.
