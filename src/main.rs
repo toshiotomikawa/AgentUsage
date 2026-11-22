@@ -91,6 +91,9 @@ struct App {
     tray: Option<tray::TrayMenu>,
     /// Whether Windows starts the app at sign-in; None where the menu has no such switch.
     autostart: Option<bool>,
+    /// The window was hidden in the tray or minimised since the last frame drawn.
+    #[cfg(windows)]
+    was_hidden: bool,
 }
 
 impl App {
@@ -145,6 +148,8 @@ impl App {
             updates: update::Checker::new(),
             #[cfg(windows)]
             autostart: Some(!shooting && autostart::enabled()),
+            #[cfg(windows)]
+            was_hidden: false,
             #[cfg(not(windows))]
             autostart: None,
             #[cfg(windows)]
@@ -200,11 +205,13 @@ impl eframe::App for App {
         // `tray::show` requests a repaint as soon as the window comes back.
         #[cfg(windows)]
         if self.screenshot.is_none() && !tray::is_visible() {
+            self.was_hidden = true;
             return;
         }
-        // Task Manager or another copy of the app can change the setting while this one runs.
+        // Task Manager or another copy of the app can change the setting while this one waits in
+        // the tray, so it is read again when the window comes back.
         #[cfg(windows)]
-        if self.autostart.is_some() {
+        if std::mem::take(&mut self.was_hidden) && self.autostart.is_some() {
             self.autostart = Some(autostart::enabled());
         }
 
