@@ -180,8 +180,17 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             tray::hide();
         }
-        // The new exe is in place: start it and leave, even while hidden in the tray.
-        if self.updates.state() == update::State::Ready && self.updates.relaunch() {
+        // The new exe is in place: start it and leave, even while hidden in the tray. It opens
+        // the way this window is now (shown, or in the tray), whatever this run started with.
+        #[cfg(windows)]
+        let (drop, add): (&[&str], &[&str]) = if tray::is_visible() {
+            (&[autostart::TRAY_ARG], &[])
+        } else {
+            (&[autostart::TRAY_ARG], &[autostart::TRAY_ARG])
+        };
+        #[cfg(not(windows))]
+        let (drop, add): (&[&str], &[&str]) = (&[], &[]);
+        if self.updates.state() == update::State::Ready && self.updates.relaunch(drop, add) {
             #[cfg(windows)]
             tray::quit();
             #[cfg(not(windows))]
@@ -192,6 +201,11 @@ impl eframe::App for App {
         #[cfg(windows)]
         if self.screenshot.is_none() && !tray::is_visible() {
             return;
+        }
+        // Task Manager or another copy of the app can change the setting while this one runs.
+        #[cfg(windows)]
+        if self.autostart.is_some() {
+            self.autostart = Some(autostart::enabled());
         }
 
         let key_refresh = ctx.input(|i| {

@@ -281,14 +281,16 @@ fn swap(exe: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Start the new exe with this run's arguments and report whether it started.
-fn spawn_new() -> bool {
+/// Start the new exe with this run's arguments, minus `drop` plus `add`, and report whether it
+/// started.
+fn spawn_new(drop: &[&str], add: &[&str]) -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
     let args: Vec<String> = std::env::args()
         .skip(1)
-        .filter(|a| a != UPDATED_ARG)
+        .filter(|a| a != UPDATED_ARG && !drop.contains(&a.as_str()))
+        .chain(add.iter().map(|a| a.to_string()))
         .collect();
     let mut started = false;
     let _ = retry(|| {
@@ -304,8 +306,9 @@ fn spawn_new() -> bool {
 impl Checker {
     /// After `Ready`: start the new exe and return true, so the caller quits. If it cannot be
     /// started, keep this window; the new version is already in place for the next start.
-    pub fn relaunch(&self) -> bool {
-        if spawn_new() {
+    /// `drop` and `add` adjust the arguments, so the new run opens the way this one is now.
+    pub fn relaunch(&self, drop: &[&str], add: &[&str]) -> bool {
+        if spawn_new(drop, add) {
             return true;
         }
         if let Ok(mut s) = self.state.lock() {

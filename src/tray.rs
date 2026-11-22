@@ -4,7 +4,7 @@
 
 use eframe::egui;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use windows_sys::Win32::Foundation::{HWND, LPARAM};
@@ -16,6 +16,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 const TITLE: &str = "AgentUsage";
 
 static HWND_: AtomicIsize = AtomicIsize::new(0);
+/// Set once the user opens the window, so the sign-in watcher never hides it again.
+static OPENED: AtomicBool = AtomicBool::new(false);
 static CTX: OnceLock<egui::Context> = OnceLock::new();
 
 // Keeps the icon alive; taken (and so removed from the tray) just before the app ends.
@@ -118,6 +120,9 @@ pub fn start_hidden() {
     std::thread::spawn(move || {
         for _ in 0..500 {
             std::thread::sleep(std::time::Duration::from_millis(10));
+            if OPENED.load(Ordering::Relaxed) {
+                return;
+            }
             if unsafe { IsWindowVisible(h as HWND) } != 0 {
                 unsafe { ShowWindow(h as HWND, SW_HIDE) };
                 return;
@@ -127,6 +132,7 @@ pub fn start_hidden() {
 }
 
 fn show(h: HWND) {
+    OPENED.store(true, Ordering::Relaxed);
     unsafe {
         ShowWindow(h, SW_SHOW);
         if IsIconic(h) != 0 {
