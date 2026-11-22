@@ -25,6 +25,8 @@ pub struct Frame<'a> {
     pub update: UpdateState,
     /// Cards the user hid (card keys).
     pub hidden: &'a [String],
+    /// Whether Windows starts the app at sign-in; None hides the switch.
+    pub autostart: Option<bool>,
 }
 
 /// What the user asked for this frame.
@@ -37,6 +39,8 @@ pub struct Actions {
     pub install_update: bool,
     /// Show or hide this card.
     pub toggle_card: Option<String>,
+    /// Turn starting with Windows on or off.
+    pub toggle_autostart: bool,
 }
 
 pub struct Dashboard {
@@ -231,7 +235,7 @@ impl Dashboard {
 
         // The menu, right-aligned under its button.
         const ITEM_H: f32 = 34.0;
-        const MENU_W: f32 = 200.0;
+        const MENU_W: f32 = 250.0;
         const MENU_PAD: f32 = 6.0;
         // Divider plus the "CARDS" caption above the card switches.
         const SECTION_H: f32 = 34.0;
@@ -251,9 +255,14 @@ impl Dashboard {
         } else {
             SECTION_H + ITEM_H * cards.len() as f32
         };
+        let items: Vec<Item> = [Item::Lang, Item::Theme, Item::GitHub, Item::Update]
+            .into_iter()
+            .chain(f.autostart.map(|_| Item::Startup))
+            .collect();
+        let items_h = ITEM_H * items.len() as f32;
         let menu_rect = Rect::from_min_size(
             pos2(menu_c.x + BTN_R - MENU_W, menu_c.y + BTN_R + 6.0),
-            vec2(MENU_W, ITEM_H * 4.0 + cards_h + MENU_PAD * 2.0),
+            vec2(MENU_W, items_h + cards_h + MENU_PAD * 2.0),
         );
         let fade = ((now - self.menu_at) / MENU_FADE).min(1.0) as f32;
         let shown = if self.menu_open {
@@ -287,8 +296,7 @@ impl Dashboard {
                         StrokeKind::Inside,
                     );
                     let mut chosen = None;
-                    let items = [Item::Lang, Item::Theme, Item::GitHub, Item::Update];
-                    for (i, item) in items.into_iter().enumerate() {
+                    for (i, &item) in items.iter().enumerate() {
                         let r = Rect::from_min_size(
                             pos2(
                                 rect.left() + MENU_PAD,
@@ -329,12 +337,14 @@ impl Dashboard {
                                 ink,
                             ),
                             Item::Update => update_icon(&p, ic, ink),
+                            Item::Startup => power_icon(&p, ic, ink),
                         }
                         let word = match item {
                             Item::Lang => lang.t("IDIOMA", "LANGUAGE"),
                             Item::Theme => lang.t("TEMA", "THEME"),
                             Item::GitHub => "GITHUB",
                             Item::Update => lang.t("ATUALIZAR", "UPDATE"),
+                            Item::Startup => lang.t("INICIAR COM O WINDOWS", "START WITH WINDOWS"),
                         };
                         p.text(
                             pos2(r.left() + 40.0, r.center().y + 0.5),
@@ -372,6 +382,14 @@ impl Dashboard {
                                 color.gamma_multiply(shown),
                             );
                         }
+                        if let (Item::Startup, Some(on)) = (item, f.autostart) {
+                            let on = ui.ctx().animate_bool_with_time(
+                                ui.scope_id().with("autostart-on"),
+                                on,
+                                0.2,
+                            );
+                            switch(&p, pal, pos2(r.right() - 22.0, r.center().y), on, shown);
+                        }
                         if resp.clicked() {
                             chosen = Some(item);
                         }
@@ -379,7 +397,7 @@ impl Dashboard {
                     // Card switches: each card can be hidden and shown again.
                     let mut toggled = None;
                     if !cards.is_empty() {
-                        let top = rect.top() + MENU_PAD + ITEM_H * 4.0;
+                        let top = rect.top() + MENU_PAD + items_h;
                         p.line_segment(
                             [
                                 pos2(rect.left() + MENU_PAD + 4.0, top + 6.0),
@@ -438,22 +456,7 @@ impl Dashboard {
                                 FontId::proportional(12.5),
                                 ink,
                             );
-                            // Switch: the track fills with the "on pace" color, the knob slides.
-                            let sw = Rect::from_center_size(
-                                pos2(r.right() - 22.0, r.center().y),
-                                vec2(26.0, 14.0),
-                            );
-                            p.rect_filled(
-                                sw,
-                                CornerRadius::same(7),
-                                lerp_color(pal.track, pal.ok, on).gamma_multiply(shown),
-                            );
-                            let kx = egui::lerp(sw.left() + 7.0..=sw.right() - 7.0, on);
-                            p.circle_filled(
-                                pos2(kx, sw.center().y),
-                                5.0,
-                                lerp_color(pal.faint, Color32::WHITE, on).gamma_multiply(shown),
-                            );
+                            switch(&p, pal, pos2(r.right() - 22.0, r.center().y), on, shown);
                             if resp.clicked() {
                                 toggled = Some(key.clone());
                             }
@@ -466,6 +469,7 @@ impl Dashboard {
             match chosen {
                 Some(Item::Lang) => act.toggle_lang = true,
                 Some(Item::Theme) => act.cycle_theme = true,
+                Some(Item::Startup) => act.toggle_autostart = true,
                 Some(Item::GitHub) => {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(icons::REPO_URL));
                     self.close_menu(now);
@@ -1037,6 +1041,7 @@ enum Item {
     Theme,
     GitHub,
     Update,
+    Startup,
 }
 
 fn resp_rect(c: Pos2) -> Rect {
@@ -1381,4 +1386,34 @@ fn update_icon(p: &Painter, c: Pos2, color: Color32) {
     p.line_segment([c + vec2(-3.5, -1.0), c + vec2(0.0, 2.5)], s);
     p.line_segment([c + vec2(3.5, -1.0), c + vec2(0.0, 2.5)], s);
     p.line_segment([c + vec2(-6.0, 6.0), c + vec2(6.0, 6.0)], s);
+}
+
+/// A menu switch: the track fills with the "on pace" color as `on` goes 0 to 1, the knob slides.
+fn switch(p: &Painter, pal: &Palette, c: Pos2, on: f32, shown: f32) {
+    let sw = Rect::from_center_size(c, vec2(26.0, 14.0));
+    p.rect_filled(
+        sw,
+        CornerRadius::same(7),
+        lerp_color(pal.track, pal.ok, on).gamma_multiply(shown),
+    );
+    let kx = egui::lerp(sw.left() + 7.0..=sw.right() - 7.0, on);
+    p.circle_filled(
+        pos2(kx, sw.center().y),
+        5.0,
+        lerp_color(pal.faint, Color32::WHITE, on).gamma_multiply(shown),
+    );
+}
+
+/// A power symbol: start with Windows.
+fn power_icon(p: &Painter, c: Pos2, color: Color32) {
+    let s = Stroke::new(1.5, color);
+    let r = 6.0;
+    let gap = 0.16;
+    let n = 32;
+    let start = -TAU / 4.0 + TAU * gap / 2.0;
+    let pts: Vec<Pos2> = (0..=n)
+        .map(|i| c + Vec2::angled(start + TAU * (1.0 - gap) * i as f32 / n as f32) * r)
+        .collect();
+    p.add(Shape::line(pts, PathStroke::new(s.width, s.color)));
+    p.line_segment([c + vec2(0.0, -7.5), c + vec2(0.0, -1.0)], s);
 }

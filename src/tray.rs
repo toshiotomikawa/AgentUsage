@@ -10,7 +10,7 @@ use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIc
 use windows_sys::Win32::Foundation::{HWND, LPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_HIDE,
-    SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow,
+    SW_RESTORE, SW_SHOW, SW_SHOWMINNOACTIVE, SetForegroundWindow, ShowWindow,
 };
 
 const TITLE: &str = "AgentUsage";
@@ -102,6 +102,24 @@ pub fn hide() {
     }
 }
 
+/// Keep a start at sign-in in the tray. eframe shows the window after its first frame whatever
+/// the viewport says, so the window is minimised first (nothing appears on screen) and hidden as
+/// soon as eframe has shown it.
+pub fn start_hidden() {
+    let Some(h) = hwnd() else { return };
+    unsafe { ShowWindow(h, SW_SHOWMINNOACTIVE) };
+    let h = h as isize;
+    std::thread::spawn(move || {
+        for _ in 0..500 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            if unsafe { IsWindowVisible(h as HWND) } != 0 {
+                unsafe { ShowWindow(h as HWND, SW_HIDE) };
+                return;
+            }
+        }
+    });
+}
+
 fn show(h: HWND) {
     unsafe {
         ShowWindow(h, SW_SHOW);
@@ -131,8 +149,9 @@ pub fn quit() -> ! {
     std::process::exit(0)
 }
 
-/// If another copy of the app already has its window, bring it forward and return true.
-pub fn focus_running() -> bool {
+/// If another copy of the app already has its window, bring it forward (unless `quiet`) and
+/// return true.
+pub fn focus_running(quiet: bool) -> bool {
     unsafe extern "system" fn each(h: HWND, found: LPARAM) -> i32 {
         let mut buf = [0u16; 64];
         let n = unsafe { GetWindowTextW(h, buf.as_mut_ptr(), buf.len() as i32) };
@@ -152,7 +171,9 @@ pub fn focus_running() -> bool {
     if found.is_null() {
         return false;
     }
-    show(found);
+    if !quiet {
+        show(found);
+    }
     true
 }
 

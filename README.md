@@ -28,7 +28,7 @@ Releases).
 - Refresh: every 20 s (minimum 15), Claude every 5 min (longer when the service asks); **F5**,
   **Ctrl+R** or the reload button force one within those limits.
 - Windows tray: closing keeps it running; click the icon to show or hide; its menu has Open and End.
-- Title-bar menu: language (PT-BR, EN-US), theme, visible cards, GitHub, Update. Saved.
+- Title-bar menu: language (PT-BR, EN-US), theme, visible cards, GitHub, Update, and (Windows) Start with Windows, off by default, which opens it in the tray at sign-in. Saved.
 
 ## Data
 

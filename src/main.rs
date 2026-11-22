@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod anim;
+#[cfg(windows)]
+mod autostart;
 mod cache;
 mod chrome;
 mod config;
@@ -32,6 +34,8 @@ struct Args {
     lang: Option<i18n::Lang>,
     screenshot: Option<PathBuf>,
     size: [f32; 2],
+    /// Started at sign-in: stay hidden in the tray until opened.
+    tray: bool,
 }
 
 fn parse_args() -> Args {
@@ -41,11 +45,14 @@ fn parse_args() -> Args {
         lang: None,
         screenshot: None,
         size: [1180.0, 780.0],
+        tray: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--demo" => args.demo = true,
+            #[cfg(windows)]
+            autostart::TRAY_ARG => args.tray = true,
             "--light" => args.theme = Some(ThemeMode::Light),
             "--dark" => args.theme = Some(ThemeMode::Dark),
             "--en" => args.lang = Some(i18n::Lang::En),
@@ -82,6 +89,8 @@ struct App {
     /// The tray menu; None without a tray icon.
     #[cfg(windows)]
     tray: Option<tray::TrayMenu>,
+    /// Whether Windows starts the app at sign-in; None where the menu has no such switch.
+    autostart: Option<bool>,
 }
 
 impl App {
@@ -118,6 +127,12 @@ impl App {
         } else {
             None
         };
+        #[cfg(windows)]
+        let shooting = args.screenshot.is_some();
+        #[cfg(windows)]
+        if args.tray && tray.is_some() {
+            tray::start_hidden();
+        }
         Self {
             data,
             dash: ui::Dashboard::new(),
@@ -128,6 +143,10 @@ impl App {
             demo_since: 0.0,
             first_frame: None,
             updates: update::Checker::new(),
+            #[cfg(windows)]
+            autostart: Some(!shooting && autostart::enabled()),
+            #[cfg(not(windows))]
+            autostart: None,
             #[cfg(windows)]
             tray,
         }
@@ -190,6 +209,7 @@ impl eframe::App for App {
             theme: self.prefs.theme,
             update: self.updates.state(),
             hidden: &self.prefs.hidden,
+            autostart: self.autostart,
         };
         let act = self.dash.title_buttons(ui, &pal, &f, bar, buttons_right);
         self.dash.show(&mut body_ui, &pal, f);
@@ -221,6 +241,14 @@ impl eframe::App for App {
                 Data::Demo(_) => self.demo_since = time,
                 Data::Live(p) => p.refresh(),
             }
+        }
+        #[cfg(windows)]
+        if act.toggle_autostart
+            && let Some(on) = self.autostart
+            && autostart::set(!on)
+        {
+            self.autostart = Some(autostart::enabled());
+            ctx.request_repaint();
         }
         if let Some(key) = &act.toggle_card {
             self.prefs.toggle_card(key);
@@ -313,11 +341,12 @@ fn main() -> eframe::Result {
     if args.screenshot.is_some() {
         args.demo = true;
     }
-    // Opening the app again (e.g. from its shortcut) brings the open window forward.
+    // Opening the app again (e.g. from its shortcut) brings the open window forward; a start at
+    // sign-in leaves it where it is.
     // After an update the old window is still closing, so this run must not hand over to it.
     let updated = std::env::args().any(|a| a == update::UPDATED_ARG);
     #[cfg(windows)]
-    if args.screenshot.is_none() && !updated && tray::focus_running() {
+    if args.screenshot.is_none() && !updated && tray::focus_running(args.tray) {
         return Ok(());
     }
     update::clean_up();
@@ -328,6 +357,8 @@ fn main() -> eframe::Result {
             .with_inner_size(args.size)
             .with_min_inner_size([400.0, 460.0])
             .with_decorations(false)
+            // A start at sign-in waits in the tray (see `tray::start_hidden`).
+            .with_visible(!args.tray)
             .with_icon(window_icon()),
         ..Default::default()
     };
