@@ -180,6 +180,13 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             tray::hide();
         }
+        // The new exe is in place: start it and leave, even while hidden in the tray.
+        if self.updates.state() == update::State::Ready && self.updates.relaunch() {
+            #[cfg(windows)]
+            tray::quit();
+            #[cfg(not(windows))]
+            std::process::exit(0);
+        }
         // Skip layout, painting and 1 s countdown timers while hidden in the tray or minimized;
         // `tray::show` requests a repaint as soon as the window comes back.
         #[cfg(windows)]
@@ -230,13 +237,6 @@ impl eframe::App for App {
                 move |url| page.open_url(egui::OpenUrl::new_tab(url)),
                 move |_| c.request_repaint(),
             );
-        }
-        // The new exe is in place: start it and leave.
-        if self.updates.state() == update::State::Ready && self.updates.relaunch() {
-            #[cfg(windows)]
-            tray::quit();
-            #[cfg(not(windows))]
-            std::process::exit(0);
         }
 
         if act.refresh || key_refresh {
