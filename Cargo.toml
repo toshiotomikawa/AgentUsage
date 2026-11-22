@@ -1,6 +1,6 @@
 [package]
 name = "agent-usage"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "MIT"
 description = "Desktop dashboard for the quota left on Antigravity, Claude, Codex, Cursor and OpenCode."
