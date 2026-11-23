@@ -357,8 +357,9 @@ fn main() -> eframe::Result {
     // agy updates itself from a detached background process. Started by our quota check, that
     // updater dies with our job object mid-download, and its `agy.exe --version` probe opens a
     // visible console window. The user's own agy sessions still keep agy up to date.
+    // Only the exact value `true` counts: agy ignores `1`.
     // SAFETY: set before any other thread exists.
-    unsafe { std::env::set_var("AGY_CLI_DISABLE_AUTO_UPDATE", "1") };
+    unsafe { std::env::set_var("AGY_CLI_DISABLE_AUTO_UPDATE", "true") };
     if std::env::args().any(|a| a == "--background") {
         run_background();
         return Ok(());
