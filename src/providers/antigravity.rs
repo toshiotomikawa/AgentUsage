@@ -146,6 +146,9 @@ mod tests {
     #[test]
     #[ignore]
     fn live_usage() {
+        // As in main: without it, this run could start agy's own updater.
+        // SAFETY: an ignored test, run on its own.
+        unsafe { std::env::set_var("AGY_CLI_DISABLE_AUTO_UPDATE", "true") };
         let f = fetch().unwrap();
         assert!(!f.groups.is_empty());
     }
