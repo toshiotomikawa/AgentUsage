@@ -334,7 +334,8 @@ mod tests {
     }
 
     /// Calls the real `agy` in an isolated signed-out environment (never touching the real
-    /// keyring) and proves it aborts quickly on the auth prompt without launching a browser.
+    /// keyring) with a temporary marker-writing browser shim, proving the shim was invoked
+    /// instead of a real browser and the process aborted on the auth prompt.
     #[test]
     #[ignore]
     fn live_signed_out_opens_no_browser() {
@@ -344,7 +345,8 @@ mod tests {
             .map_or_else(|| OsString::from("agy"), |p| p.into_os_string());
         let tmp =
             std::env::temp_dir().join(format!("agent-usage-signed-out-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
         struct Clean(PathBuf);
         impl Drop for Clean {
             fn drop(&mut self) {
@@ -352,8 +354,28 @@ mod tests {
             }
         }
         let _clean = Clean(tmp.clone());
+        let shim = tmp.join("shim");
+        std::fs::create_dir_all(&shim).unwrap();
+        let marker = tmp.join("browser-called.txt");
+        #[cfg(windows)]
+        {
+            let script = format!("@echo %* > \"{}\"\r\n@exit /b 1\r\n", marker.display());
+            std::fs::write(shim.join("rundll32.cmd"), script).unwrap();
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let script = format!(
+                "#!/bin/sh\necho \"$@\" > \"{}\"\nexit 1\n",
+                marker.display()
+            );
+            for name in ["xdg-open", "open"] {
+                let p = shim.join(name);
+                std::fs::write(&p, &script).unwrap();
+                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
         let log = tmp.join("agy.log").to_string_lossy().into_owned();
-        let shim = no_browser_dir().unwrap();
         let mut env_owned = child_env(Some(&shim));
         env_owned.extend([
             ("AGY_CLI_DISABLE_AUTO_UPDATE", OsString::from("true")),
@@ -365,7 +387,6 @@ mod tests {
         ]);
         let env_refs: Vec<(&str, &std::ffi::OsStr)> =
             env_owned.iter().map(|(k, v)| (*k, v.as_os_str())).collect();
-        let started = Instant::now();
         let err = crate::hidden::run(
             &exe,
             &[
@@ -383,7 +404,15 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, RunError::Aborted);
-        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(
+            marker.is_file(),
+            "expected browser shim marker file to be written by signed-out agy"
+        );
+        let recorded = std::fs::read_to_string(&marker).unwrap_or_default();
+        assert!(
+            recorded.contains("accounts.google.com") || recorded.contains("oauth"),
+            "expected OAuth URL in shim marker, got: {recorded}"
+        );
     }
 
     #[test]
