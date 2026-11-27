@@ -50,6 +50,14 @@ pub fn save(key: &str, groups: &[Group], account: Option<&str>) {
     }
 }
 
+/// Drop any saved reading for `key` (for instance after a sign-out, so stale numbers do not
+/// come back on the next poll tick).
+pub fn clear(key: &str) {
+    if let Some(path) = path(key) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// The right to read a source; the lease file goes away when this is dropped.
 pub struct Lease(Option<PathBuf>);
 
