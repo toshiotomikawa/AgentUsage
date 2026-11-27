@@ -404,6 +404,11 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, RunError::Aborted);
+        // The shim may still be writing when agy is killed; give it a moment.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !marker.is_file() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert!(
             marker.is_file(),
             "expected browser shim marker file to be written by signed-out agy"
