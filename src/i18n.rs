@@ -40,6 +40,10 @@ const DATA: &[(&str, &str)] = &[
         "not signed in with a subscription",
     ),
     ("sem login do chatgpt", "not signed in to ChatGPT"),
+    (
+        "sem login — entre no agy",
+        "not signed in — sign in with agy",
+    ),
     ("sem login", "not signed in"),
     ("não conectado", "not connected"),
     ("sem assinatura go", "no Go subscription"),
@@ -124,6 +128,10 @@ mod tests {
         assert_eq!(
             Lang::En.data("login expirado — entre de novo no Claude Code"),
             "login expired — sign in to Claude Code again"
+        );
+        assert_eq!(
+            Lang::En.data("sem login — entre no agy"),
+            "not signed in — sign in with agy"
         );
         assert_eq!(
             Lang::En.data("serviço respondeu 500"),
