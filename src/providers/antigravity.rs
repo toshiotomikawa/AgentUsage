@@ -13,7 +13,7 @@
 //! `rundll32` on Windows (`open` / `xdg-open` on Unix). Setting `SSH_CONNECTION` suppresses the
 //! browser, but also makes `agy` skip the OS keyring and break signed-in reads. Instead, we
 //! prepend a no-op browser shim directory to the child's `PATH` and abort the process as soon as
-//! `stderr` prints `"Authentication required"`, then back off until a reading succeeds.
+//! `stderr` prints its sign-in prompt, then back off until a reading succeeds.
 
 use super::{Fetched, Source, parse_time};
 use crate::hidden::RunError;
@@ -35,7 +35,7 @@ const MAX_AUTH_BACKOFF: Duration = Duration::from_secs(30 * 60);
 pub(crate) const NOT_SIGNED_IN: &str = "sem login — entre no agy";
 
 /// Stderr marker printed by `agy -p` as soon as silent auth fails and interactive OAuth starts.
-const AUTH_STDERR_MARKER: &str = "Authentication required";
+const AUTH_STDERR_MARKER: &str = "Authentication required. Please visit the URL to log in";
 
 /// Pause between signed-out polls so we do not spawn `agy` every minute while signed out.
 /// Doubles from 5 min up to 30 min, and resets immediately once a reading succeeds.
@@ -138,7 +138,9 @@ fn no_browser_dir() -> Option<PathBuf> {
     std::fs::create_dir_all(&dir).ok()?;
     #[cfg(windows)]
     {
-        write_if_changed(&dir.join("rundll32.cmd"), b"@exit /b 1\r\n")?;
+        // `exit`, not `exit /b`: cmd.exe splits the unquoted sign-in link at each `&` and would
+        // run every later piece as a command; ending cmd.exe here stops it at the first one.
+        write_if_changed(&dir.join("rundll32.cmd"), b"@exit 1\r\n")?;
     }
     #[cfg(not(windows))]
     {
@@ -212,8 +214,9 @@ fn run_usage() -> Result<String, UsageError> {
     if let Some(log) = &log_str {
         args.extend(["--log-file", log]);
     }
-    let shim_dir = no_browser_dir();
-    let env_owned = child_env(shim_dir.as_deref());
+    // Without the browser blocker a signed-out check could open a tab: do not start agy at all.
+    let shim_dir = no_browser_dir().ok_or(UsageError::Failed)?;
+    let env_owned = child_env(Some(&shim_dir));
     let env_refs: Vec<(&str, &std::ffi::OsStr)> =
         env_owned.iter().map(|(k, v)| (*k, v.as_os_str())).collect();
     match crate::hidden::run(
@@ -359,7 +362,7 @@ mod tests {
         let marker = tmp.join("browser-called.txt");
         #[cfg(windows)]
         {
-            let script = format!("@echo %* > \"{}\"\r\n@exit /b 1\r\n", marker.display());
+            let script = format!("@echo %* > \"{}\"\r\n@exit 1\r\n", marker.display());
             std::fs::write(shim.join("rundll32.cmd"), script).unwrap();
         }
         #[cfg(not(windows))]
@@ -571,7 +574,7 @@ mod tests {
             &cmd,
             &[
                 "/c",
-                "rundll32 url.dll,FileProtocolHandler https://example.com & echo Authentication required. Please visit the URL to log in: 1>&2 & ping -n 20 127.0.0.1 >nul",
+                "cmd /c rundll32 url.dll,FileProtocolHandler https://example.com & echo Authentication required. Please visit the URL to log in: 1>&2 & ping -n 20 127.0.0.1 >nul",
             ],
             &std::env::temp_dir(),
             Duration::from_secs(15),

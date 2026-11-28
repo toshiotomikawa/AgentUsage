@@ -44,10 +44,12 @@ fn read_stream(mut reader: impl Read, needle: Option<String>, aborted: Arc<Atomi
         match reader.read(&mut buf[..want]) {
             Ok(0) | Err(_) => break,
             Ok(n) => {
+                // Search only the new bytes plus enough old ones to catch a match split across reads.
+                let from = needle_bytes.map_or(0, |pat| raw.len().saturating_sub(pat.len() - 1));
                 raw.extend_from_slice(&buf[..n]);
                 if let Some(pat) = needle_bytes
                     && !aborted.load(Ordering::Relaxed)
-                    && raw.windows(pat.len()).any(|w| w == pat)
+                    && raw[from..].windows(pat.len()).any(|w| w == pat)
                 {
                     aborted.store(true, Ordering::Release);
                 }
